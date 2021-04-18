@@ -1,8 +1,13 @@
 #include "source-copy.hpp"
 #include <obs-module.h>
 #include <QClipboard>
+#include <QFileDialog>
 #include <QGuiApplication>
+#include <QLabel>
 #include <QMenu>
+#include <QWidgetAction>
+
+#include "version.h"
 
 #define QT_UTF8(str) QString::fromUtf8(str)
 #define QT_TO_UTF8(str) str.toUtf8().constData()
@@ -13,11 +18,48 @@ OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source);
 
+static void LoadScene(obs_data_t *data)
+{
+	if (!data)
+		return;
+	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
+	if (!sourcesData)
+		return;
+	const size_t count = obs_data_array_count(sourcesData);
+	std::list<obs_source_t *> sources;
+	for (size_t i = 0; i < count; i++) {
+		obs_data_t *sourceData = obs_data_array_item(sourcesData, i);
+		obs_source_t *s = obs_load_source(sourceData);
+		if (s) {
+			sources.push_back(s);
+		}
+		obs_data_release(sourceData);
+	}
+	for (auto it = sources.begin(); it != sources.end(); ++it) {
+		obs_source_load(*it);
+	}
+	for (auto it = sources.begin(); it != sources.end(); ++it) {
+		obs_source_release(*it);
+	}
+	obs_data_array_release(sourcesData);
+}
+
 static void LoadMenu(QMenu *menu)
 {
 	menu->clear();
-	//menu->addAction(obs_module_text("Load Scene"));
-	QAction *a = menu->addAction(QT_UTF8(obs_module_text("PasteScene")));
+	QAction *a = menu->addAction(obs_module_text("LoadScene"));
+	QObject::connect(a, &QAction::triggered, [] {
+		QString fileName = QFileDialog::getOpenFileName(
+			nullptr, QT_UTF8(obs_module_text("LoadScene")),
+			QString(), "JSON File (*.json)");
+		if (fileName.isEmpty())
+			return;
+		obs_data_t *data =
+			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
+		LoadScene(data);
+		obs_data_release(data);
+	});
+	a = menu->addAction(QT_UTF8(obs_module_text("PasteScene")));
 	QObject::connect(a, &QAction::triggered, [] {
 		QClipboard *clipboard = QGuiApplication::clipboard();
 		const QString strData = clipboard->text();
@@ -25,35 +67,17 @@ static void LoadMenu(QMenu *menu)
 			return;
 		obs_data_t *data =
 			obs_data_create_from_json(QT_TO_UTF8(strData));
-		if (!data)
-			return;
-		obs_data_array_t *sourcesData =
-			obs_data_get_array(data, "sources");
-		if (sourcesData) {
-			const size_t count = obs_data_array_count(sourcesData);
-			std::list<obs_source_t *> sources;
-			for (size_t i = 0; i < count; i++) {
-				obs_data_t *sourceData =
-					obs_data_array_item(sourcesData, i);
-				obs_source_t *s = obs_load_source(sourceData);
-				if (s) {
-					sources.push_back(s);
-				}
-				obs_data_release(sourceData);
-			}
-			for (auto it = sources.begin(); it != sources.end();
-			     ++it) {
-				obs_source_load(*it);
-			}
-			for (auto it = sources.begin(); it != sources.end();
-			     ++it) {
-				obs_source_release(*it);
-			}
-			obs_data_array_release(sourcesData);
-		}
+		LoadScene(data);
 		obs_data_release(data);
 	});
-	menu->addSection(QT_UTF8(obs_module_text("Scenes")));
+	auto label =
+		new QLabel("<b>" + QT_UTF8(obs_module_text("Scenes")) + "</b>");
+	label->setAlignment(Qt::AlignCenter);
+
+	auto wa = new QWidgetAction(menu);
+	wa->setDefaultWidget(label);
+	menu->addAction(wa);
+
 	struct obs_frontend_source_list scenes = {};
 	obs_frontend_get_scenes(&scenes);
 	for (size_t i = 0; i < scenes.sources.num; i++) {
@@ -71,6 +95,7 @@ static void LoadMenu(QMenu *menu)
 
 bool obs_module_load()
 {
+	blog(LOG_INFO, "[Source Copy] loaded version %s", PROJECT_VERSION);
 	QAction *action =
 		static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(
 			obs_module_text("SourceCopy")));
@@ -95,7 +120,19 @@ MODULE_EXPORT const char *obs_module_name(void)
 static void AddFilterMenu(obs_source_t *parent, obs_source_t *child, void *data)
 {
 	QMenu *menu = static_cast<QMenu *>(data);
-	QAction *a = menu->addAction(obs_source_get_name(child));
+	QMenu *submenu = menu->addMenu(QT_UTF8(obs_source_get_name(child)));
+	QAction *a = submenu->addAction(QT_UTF8(obs_module_text("SaveFilter")));
+	QObject::connect(a, &QAction::triggered, [child] {
+		QString fileName = QFileDialog::getSaveFileName(
+			nullptr, QT_UTF8(obs_module_text("SaveFilter")),
+			QString(), "JSON File (*.json)");
+		if (fileName.isEmpty())
+			return;
+		obs_data_t *data = obs_save_source(child);
+		obs_data_save_json(data, QT_TO_UTF8(fileName));
+		obs_data_release(data);
+	});
+	a = submenu->addAction(QT_UTF8(obs_module_text("CopyFilter")));
 	QObject::connect(a, &QAction::triggered, [child] {
 		obs_data_t *data = obs_save_source(child);
 		QClipboard *clipboard = QGuiApplication::clipboard();
@@ -128,6 +165,48 @@ static bool SaveSource(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
 	return true;
 }
 
+static void LoadSource(obs_scene_t *scene, obs_data_t *data)
+{
+	if (!data)
+		return;
+	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
+	if (sourcesData) {
+		const size_t count = obs_data_array_count(sourcesData);
+		std::list<obs_source_t *> sources;
+		for (size_t i = 0; i < count; i++) {
+			obs_data_t *sourceData =
+				obs_data_array_item(sourcesData, i);
+			obs_source_t *s = obs_load_source(sourceData);
+			if (s) {
+				sources.push_back(s);
+				if (obs_source_get_type(s) ==
+				    OBS_SOURCE_TYPE_SCENE) {
+					obs_scene_add(scene, s);
+				}
+			}
+			obs_data_release(sourceData);
+		}
+		for (auto it = sources.begin(); it != sources.end(); ++it) {
+			obs_source_load(*it);
+		}
+		for (auto it = sources.begin(); it != sources.end(); ++it) {
+			obs_source_release(*it);
+		}
+		obs_data_array_release(sourcesData);
+	} else {
+		obs_source_t *source = obs_load_source(data);
+		if (source) {
+			if (obs_source_get_type(source) ==
+			    OBS_SOURCE_TYPE_INPUT) {
+				obs_scene_add(scene, source);
+				obs_source_load(source);
+			}
+			obs_source_release(source);
+		}
+	}
+	obs_data_release(data);
+}
+
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 {
 	menu->clear();
@@ -137,12 +216,33 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 
 	QAction *a;
 	if (scene) {
-		//a = menu->addAction(obs_scene_is_group(scene)
-		//			    ? obs_module_text("Save Group")
-		//			    : obs_module_text("Save Scene"));
-		a = menu->addAction(QT_UTF8(obs_scene_is_group(scene)
-					    ? obs_module_text("CopyGroup")
-					    : obs_module_text("CopyScene")));
+		a = menu->addAction(
+			QT_UTF8(obs_scene_is_group(scene)
+					? obs_module_text("SaveGroup")
+					: obs_module_text("SaveScene")));
+		QObject::connect(a, &QAction::triggered, [scene, source] {
+			QString fileName = QFileDialog::getSaveFileName(
+				nullptr,
+				QT_UTF8(obs_scene_is_group(scene)
+						? obs_module_text("SaveGroup")
+						: obs_module_text("SaveScene")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_data_create();
+			obs_data_array_t *sources = obs_data_array_create();
+			obs_data_set_array(data, "sources", sources);
+			obs_scene_enum_items(scene, SaveSource, sources);
+			obs_data_t *sceneData = obs_save_source(source);
+			obs_data_array_push_back(sources, sceneData);
+			obs_data_release(sceneData);
+			obs_data_save_json(data, QT_TO_UTF8(fileName));
+			obs_data_release(data);
+		});
+		a = menu->addAction(
+			QT_UTF8(obs_scene_is_group(scene)
+					? obs_module_text("CopyGroup")
+					: obs_module_text("CopyScene")));
 		QObject::connect(a, &QAction::triggered, [scene, source] {
 			obs_data_t *data = obs_data_create();
 			obs_data_array_t *sources = obs_data_array_create();
@@ -155,8 +255,18 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 			clipboard->setText(QT_UTF8(obs_data_get_json(data)));
 			obs_data_release(data);
 		});
-		menu->addSeparator();
-		//menu->addAction(obs_module_text("Load Source"));
+		a = menu->addAction(obs_module_text("LoadSource"));
+		QObject::connect(a, &QAction::triggered, [scene] {
+			QString fileName = QFileDialog::getOpenFileName(
+				nullptr, QT_UTF8(obs_module_text("LoadSource")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_data_create_from_json_file(
+				QT_TO_UTF8(fileName));
+			LoadSource(scene, data);
+			obs_data_release(data);
+		});
 		a = menu->addAction(QT_UTF8(obs_module_text("PasteSource")));
 		QObject::connect(a, &QAction::triggered, [scene] {
 			QClipboard *clipboard = QGuiApplication::clipboard();
@@ -165,53 +275,21 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 				return;
 			obs_data_t *data =
 				obs_data_create_from_json(QT_TO_UTF8(strData));
-			if (!data)
-				return;
-			obs_data_array_t *sourcesData =
-				obs_data_get_array(data, "sources");
-			if (sourcesData) {
-				const size_t count =
-					obs_data_array_count(sourcesData);
-				std::list<obs_source_t *> sources;
-				for (size_t i = 0; i < count; i++) {
-					obs_data_t *sourceData =
-						obs_data_array_item(sourcesData,
-								    i);
-					obs_source_t *s =
-						obs_load_source(sourceData);
-					if (s) {
-						sources.push_back(s);
-						if (obs_source_get_type(s) ==
-						    OBS_SOURCE_TYPE_SCENE) {
-							obs_scene_add(scene, s);
-						}
-					}
-					obs_data_release(sourceData);
-				}
-				for (auto it = sources.begin();
-				     it != sources.end(); ++it) {
-					obs_source_load(*it);
-				}
-				for (auto it = sources.begin();
-				     it != sources.end(); ++it) {
-					obs_source_release(*it);
-				}
-				obs_data_array_release(sourcesData);
-			} else {
-				obs_source_t *source = obs_load_source(data);
-				if (source) {
-					if (obs_source_get_type(source) ==
-					    OBS_SOURCE_TYPE_INPUT) {
-						obs_scene_add(scene, source);
-						obs_source_load(source);
-					}
-					obs_source_release(source);
-				}
-			}
+			LoadSource(scene, data);
 			obs_data_release(data);
 		});
 	} else {
-		//a = menu->addAction(obs_module_text("Save Source"));
+		a = menu->addAction(QT_UTF8(obs_module_text("SaveSource")));
+		QObject::connect(a, &QAction::triggered, [source] {
+			QString fileName = QFileDialog::getSaveFileName(
+				nullptr, QT_UTF8(obs_module_text("SaveSource")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_save_source(source);
+			obs_data_save_json(data, QT_TO_UTF8(fileName));
+			obs_data_release(data);
+		});
 		a = menu->addAction(QT_UTF8(obs_module_text("CopySource")));
 		QObject::connect(a, &QAction::triggered, [source] {
 			obs_data_t *data = obs_save_source(source);
@@ -220,8 +298,28 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 			obs_data_release(data);
 		});
 	}
-	menu->addSeparator();
-	//menu->addAction(obs_module_text("Load Filter"));
+	a = menu->addAction(QT_UTF8(obs_module_text("LoadFilter")));
+	QObject::connect(a, &QAction::triggered, [source] {
+		QString fileName = QFileDialog::getOpenFileName(
+			nullptr, QT_UTF8(obs_module_text("LoadFilter")),
+			QString(), "JSON File (*.json)");
+		if (fileName.isEmpty())
+			return;
+		obs_data_t *data =
+			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
+		if (!data)
+			return;
+		obs_source_t *filter = obs_load_source(data);
+		if (filter) {
+			if (obs_source_get_type(filter) ==
+			    OBS_SOURCE_TYPE_FILTER) {
+				obs_source_filter_add(source, filter);
+				obs_source_load(filter);
+			}
+			obs_source_release(source);
+		}
+		obs_data_release(data);
+	});
 	a = menu->addAction(QT_UTF8(obs_module_text("PasteFilter")));
 	QObject::connect(a, &QAction::triggered, [source] {
 		QClipboard *clipboard = QGuiApplication::clipboard();
@@ -245,9 +343,29 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 	});
 
 	if (scene) {
-		menu->addSection(obs_module_text("Sources"));
+		auto label = new QLabel(
+			"<b>" + QT_UTF8(obs_module_text("Sources")) + "</b>");
+		label->setAlignment(Qt::AlignCenter);
+
+		auto wa = new QWidgetAction(menu);
+		wa->setDefaultWidget(label);
+		menu->addAction(wa);
 		obs_scene_enum_items(scene, AddSceneItemToMenu, menu);
+		if (menu->actions().last() == wa) {
+			menu->removeAction(wa);
+			delete wa;
+		}
 	}
-	menu->addSection(obs_module_text("Filters"));
+	auto label = new QLabel("<b>" + QT_UTF8(obs_module_text("Filters")) +
+				"</b>");
+	label->setAlignment(Qt::AlignCenter);
+
+	auto wa = new QWidgetAction(menu);
+	wa->setDefaultWidget(label);
+	menu->addAction(wa);
 	obs_source_enum_filters(source, AddFilterMenu, menu);
+	if (menu->actions().last() == wa) {
+		menu->removeAction(wa);
+		delete wa;
+	}
 }
