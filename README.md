@@ -2,6 +2,9 @@
 
 Plugin for OBS Studio to add copy and paste options to the tools menu.
 
+# Download
+https://obsproject.com/forum/resources/source-copy.1261/
+
 # Build
 - Build OBS Studio: https://obsproject.com/wiki/Install-Instructions
 - Check out this repository to UI/frontend-plugins/source-copy
