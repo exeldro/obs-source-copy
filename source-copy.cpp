@@ -4,6 +4,7 @@
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QLabel>
+#include <QMainWindow>
 #include <QMenu>
 #include <QWidgetAction>
 
@@ -93,9 +94,71 @@ static void LoadMenu(QMenu *menu)
 	obs_frontend_source_list_free(&scenes);
 }
 
+void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
+		   bool pressed)
+{
+	if (!pressed)
+		return;
+	const auto main_window =
+		static_cast<QMainWindow *>(obs_frontend_get_main_window());
+
+	QAction *t = main_window->findChild<QAction *>("actionCopyTransform");
+	if (t)
+		t->trigger();
+}
+
+void PasteTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
+		    bool pressed)
+{
+	if (!pressed)
+		return;
+	const auto main_window =
+		static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	QAction *t = main_window->findChild<QAction *>("actionPasteTransform");
+	if (t)
+		t->trigger();
+}
+
+obs_hotkey_id copyTransformHotkey = OBS_INVALID_HOTKEY_ID;
+obs_hotkey_id pasteTransformHotkey = OBS_INVALID_HOTKEY_ID;
+
+static void frontend_save_load(obs_data_t *save_data, bool saving, void *)
+{
+	if (saving) {
+		obs_data_array_t *hotkey_save_array =
+			obs_hotkey_save(copyTransformHotkey);
+		obs_data_set_array(save_data, "copyTransformHotkey",
+				   hotkey_save_array);
+		obs_data_array_release(hotkey_save_array);
+		hotkey_save_array = obs_hotkey_save(pasteTransformHotkey);
+		obs_data_set_array(save_data, "pasteTransformHotkey",
+				   hotkey_save_array);
+		obs_data_array_release(hotkey_save_array);
+	} else {
+		obs_data_array_t *hotkey_save_array =
+			obs_data_get_array(save_data, "copyTransformHotkey");
+		obs_hotkey_load(copyTransformHotkey, hotkey_save_array);
+		obs_data_array_release(hotkey_save_array);
+		hotkey_save_array =
+			obs_data_get_array(save_data, "pasteTransformHotkey");
+		obs_hotkey_load(pasteTransformHotkey, hotkey_save_array);
+		obs_data_array_release(hotkey_save_array);
+	}
+}
+
 bool obs_module_load()
 {
 	blog(LOG_INFO, "[Source Copy] loaded version %s", PROJECT_VERSION);
+
+	copyTransformHotkey = obs_hotkey_register_frontend("actionCopyTransform",
+		obs_module_text("CopyTransform"),
+		CopyTransform, nullptr);
+	pasteTransformHotkey = obs_hotkey_register_frontend(
+		"actionPasteTransform",
+				     obs_module_text("PasteTransform"),
+				     PasteTransform, nullptr);
+	obs_frontend_add_save_callback(frontend_save_load, nullptr);
+	
 	QAction *action =
 		static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(
 			obs_module_text("SourceCopy")));
@@ -105,7 +168,12 @@ bool obs_module_load()
 	return true;
 }
 
-void obs_module_unload() {}
+void obs_module_unload()
+{
+	obs_frontend_remove_save_callback(frontend_save_load, nullptr);
+	obs_hotkey_unregister(copyTransformHotkey);
+	obs_hotkey_unregister(pasteTransformHotkey);
+}
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
