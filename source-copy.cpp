@@ -384,7 +384,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 				obs_source_filter_add(source, filter);
 				obs_source_load(filter);
 			}
-			obs_source_release(source);
+			obs_source_release(filter);
 		}
 		obs_data_release(data);
 	});
@@ -405,7 +405,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 				obs_source_filter_add(source, filter);
 				obs_source_load(filter);
 			}
-			obs_source_release(source);
+			obs_source_release(filter);
 		}
 		obs_data_release(data);
 	});
