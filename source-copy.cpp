@@ -19,6 +19,39 @@ OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source);
 
+static void LoadSources(obs_data_array_t *data)
+{
+	const size_t count = obs_data_array_count(data);
+	std::vector<obs_source_t *> sources;
+	sources.reserve(count);
+	for (size_t i = 0; i < count; i++) {
+		obs_data_t *sourceData = obs_data_array_item(data, i);
+		const char *name = obs_data_get_string(sourceData, "name");
+
+		obs_source_t *s = obs_get_source_by_name(name);
+		if (!s)
+			s = obs_load_source(sourceData);
+		if (s)
+			sources.push_back(s);
+		obs_scene_t *scene = obs_scene_from_source(s);
+		if (!scene)
+			scene = obs_group_from_source(s);
+		if (scene) {
+			obs_data_t *scene_settings =
+				obs_data_get_obj(sourceData, "settings");
+			obs_source_update(s, scene_settings);
+			obs_data_release(scene_settings);
+		}
+		obs_data_release(sourceData);
+	}
+
+	for (obs_source_t *source : sources)
+		obs_source_load(source);
+
+	for (obs_source_t *source : sources)
+		obs_source_release(source);
+}
+
 static void LoadScene(obs_data_t *data)
 {
 	if (!data)
@@ -26,22 +59,7 @@ static void LoadScene(obs_data_t *data)
 	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
 	if (!sourcesData)
 		return;
-	const size_t count = obs_data_array_count(sourcesData);
-	std::list<obs_source_t *> sources;
-	for (size_t i = 0; i < count; i++) {
-		obs_data_t *sourceData = obs_data_array_item(sourcesData, i);
-		obs_source_t *s = obs_load_source(sourceData);
-		if (s) {
-			sources.push_back(s);
-		}
-		obs_data_release(sourceData);
-	}
-	for (auto it = sources.begin(); it != sources.end(); ++it) {
-		obs_source_load(*it);
-	}
-	for (auto it = sources.begin(); it != sources.end(); ++it) {
-		obs_source_release(*it);
-	}
+	LoadSources(sourcesData);
 	obs_data_array_release(sourcesData);
 }
 
@@ -150,15 +168,14 @@ bool obs_module_load()
 {
 	blog(LOG_INFO, "[Source Copy] loaded version %s", PROJECT_VERSION);
 
-	copyTransformHotkey = obs_hotkey_register_frontend("actionCopyTransform",
-		obs_module_text("CopyTransform"),
+	copyTransformHotkey = obs_hotkey_register_frontend(
+		"actionCopyTransform", obs_module_text("CopyTransform"),
 		CopyTransform, nullptr);
 	pasteTransformHotkey = obs_hotkey_register_frontend(
-		"actionPasteTransform",
-				     obs_module_text("PasteTransform"),
-				     PasteTransform, nullptr);
+		"actionPasteTransform", obs_module_text("PasteTransform"),
+		PasteTransform, nullptr);
 	obs_frontend_add_save_callback(frontend_save_load, nullptr);
-	
+
 	QAction *action =
 		static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(
 			obs_module_text("SourceCopy")));
@@ -227,6 +244,19 @@ static bool SaveSource(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	if (!source)
 		return true;
+	const char *name = obs_source_get_name(source);
+	const size_t count = obs_data_array_count(sources);
+	for (size_t i = 0; i < count; i++) {
+		obs_data_t *sourceData = obs_data_array_item(sources, i);
+		obs_data_release(sourceData);
+		if (strcmp(name, obs_data_get_string(sourceData, "name")) == 0)
+			return true;
+	}
+	obs_scene_t *nested_scene = obs_scene_from_source(source);
+	if (!nested_scene)
+		nested_scene = obs_group_from_source(source);
+	if (nested_scene)
+		obs_scene_enum_items(nested_scene, SaveSource, sources);
 	obs_data_t *sceneData = obs_save_source(source);
 	obs_data_array_push_back(sources, sceneData);
 	obs_data_release(sceneData);
@@ -239,30 +269,13 @@ static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 		return;
 	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
 	if (sourcesData) {
-		const size_t count = obs_data_array_count(sourcesData);
-		std::list<obs_source_t *> sources;
-		for (size_t i = 0; i < count; i++) {
-			obs_data_t *sourceData =
-				obs_data_array_item(sourcesData, i);
-			obs_source_t *s = obs_load_source(sourceData);
-			if (s) {
-				sources.push_back(s);
-				if (obs_source_get_type(s) ==
-				    OBS_SOURCE_TYPE_SCENE) {
-					obs_scene_add(scene, s);
-				}
-			}
-			obs_data_release(sourceData);
-		}
-		for (auto it = sources.begin(); it != sources.end(); ++it) {
-			obs_source_load(*it);
-		}
-		for (auto it = sources.begin(); it != sources.end(); ++it) {
-			obs_source_release(*it);
-		}
+		LoadSources(sourcesData);
 		obs_data_array_release(sourcesData);
 	} else {
-		obs_source_t *source = obs_load_source(data);
+		const char *name = obs_data_get_string(data, "name");
+		obs_source_t *source = obs_get_source_by_name(name);
+		if (!source)
+			source = obs_load_source(data);
 		if (source) {
 			if (obs_source_get_type(source) ==
 			    OBS_SOURCE_TYPE_INPUT) {
@@ -377,15 +390,18 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
 		if (!data)
 			return;
-		obs_source_t *filter = obs_load_source(data);
-		if (filter) {
-			if (obs_source_get_type(filter) ==
-			    OBS_SOURCE_TYPE_FILTER) {
+		const char *name = obs_data_get_string(data, "name");
+		obs_source_t *filter =
+			obs_source_get_filter_by_name(source, name);
+		if (!filter) {
+			filter = obs_load_source(data);
+			if (filter && obs_source_get_type(filter) ==
+					      OBS_SOURCE_TYPE_FILTER) {
 				obs_source_filter_add(source, filter);
 				obs_source_load(filter);
 			}
-			obs_source_release(filter);
 		}
+		obs_source_release(filter);
 		obs_data_release(data);
 	});
 	a = menu->addAction(QT_UTF8(obs_module_text("PasteFilter")));
@@ -398,15 +414,18 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 			obs_data_create_from_json(QT_TO_UTF8(strData));
 		if (!data)
 			return;
-		obs_source_t *filter = obs_load_source(data);
-		if (filter) {
-			if (obs_source_get_type(filter) ==
-			    OBS_SOURCE_TYPE_FILTER) {
+		const char *name = obs_data_get_string(data, "name");
+		obs_source_t *filter =
+			obs_source_get_filter_by_name(source, name);
+		if (!filter) {
+			filter = obs_load_source(data);
+			if (filter && obs_source_get_type(filter) ==
+					      OBS_SOURCE_TYPE_FILTER) {
 				obs_source_filter_add(source, filter);
 				obs_source_load(filter);
 			}
-			obs_source_release(filter);
 		}
+		obs_source_release(filter);
 		obs_data_release(data);
 	});
 
