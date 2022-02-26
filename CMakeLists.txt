@@ -1,7 +1,12 @@
-project(source-copy VERSION 0.1.3)
+cmake_minimum_required(VERSION 3.18)
+project(source-copy VERSION 0.1.4)
 set(PROJECT_FULL_NAME "Source Copy")
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/version.h)
+
+find_package(Qt5Widgets)
+
+set(CMAKE_AUTOMOC ON)
 
 set(source-copy_HEADERS
 	source-copy.hpp
@@ -24,6 +29,10 @@ if(WIN32)
 		source-copy.rc)
 endif()
 
+if(BUILD_OUT_OF_TREE)
+    find_package(LibObs REQUIRED)
+endif()
+
 add_library(source-copy MODULE
 	${source-copy_HEADERS}
 	${source-copy_SOURCES})
@@ -33,5 +42,21 @@ target_link_libraries(source-copy
 		Qt5::Widgets
 		libobs)
 
-set_target_properties(source-copy PROPERTIES FOLDER "plugins/exeldro")
-install_obs_plugin_with_data(source-copy data)
+if(BUILD_OUT_OF_TREE)
+    if(NOT LIB_OUT_DIR)
+        set(LIB_OUT_DIR "/lib/obs-plugins")
+    endif()
+    if(NOT DATA_OUT_DIR)
+        set(DATA_OUT_DIR "/share/obs/obs-plugins/source-copy")
+    endif()
+    set_target_properties(source-copy PROPERTIES PREFIX "")
+    install(TARGETS source-copy
+        LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/${LIB_OUT_DIR})
+    install(DIRECTORY data/locale
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/${DATA_OUT_DIR})
+else()
+    target_include_directories(source-copy PRIVATE
+        "${CMAKE_SOURCE_DIR}/UI/obs-frontend-api")
+    set_target_properties(source-copy PROPERTIES FOLDER "plugins/exeldro")
+    install_obs_plugin_with_data(source-copy data)
+endif()
