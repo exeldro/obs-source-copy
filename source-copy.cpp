@@ -17,7 +17,8 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("Exeldro");
 OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
-static void LoadSourceMenu(QMenu *menu, obs_source_t *source);
+static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
+			   obs_sceneitem_t *item);
 
 static void LoadSources(obs_data_array_t *data)
 {
@@ -103,10 +104,10 @@ static void LoadMenu(QMenu *menu)
 		obs_source_t *source = scenes.sources.array[i];
 		QMenu *submenu = menu->addMenu(
 			obs_source_get_name(scenes.sources.array[i]));
-		QObject::connect(submenu, &QMenu::aboutToShow,
-				 [submenu, source] {
-					 LoadSourceMenu(submenu, source);
-				 });
+		QObject::connect(
+			submenu, &QMenu::aboutToShow, [submenu, source] {
+				LoadSourceMenu(submenu, source, nullptr);
+			});
 	}
 
 	obs_frontend_source_list_free(&scenes);
@@ -119,6 +120,8 @@ void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
 		return;
 	const auto main_window =
 		static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	if (!main_window->isActiveWindow())
+		return;
 
 	QAction *t = main_window->findChild<QAction *>("actionCopyTransform");
 	if (t)
@@ -132,6 +135,8 @@ void PasteTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
 		return;
 	const auto main_window =
 		static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	if (!main_window->isActiveWindow())
+		return;
 	QAction *t = main_window->findChild<QAction *>("actionPasteTransform");
 	if (t)
 		t->trigger();
@@ -232,8 +237,8 @@ static bool AddSceneItemToMenu(obs_scene_t *scene, obs_sceneitem_t *item,
 	QMenu *menu = static_cast<QMenu *>(data);
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	QMenu *submenu = menu->addMenu(obs_source_get_name(source));
-	QObject::connect(submenu, &QMenu::aboutToShow, [submenu, source] {
-		LoadSourceMenu(submenu, source);
+	QObject::connect(submenu, &QMenu::aboutToShow, [submenu, source, item] {
+		LoadSourceMenu(submenu, source, item);
 	});
 	return true;
 }
@@ -288,9 +293,53 @@ static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 	obs_data_release(data);
 }
 
-static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
+static obs_data_t *GetTransformData(obs_sceneitem_t *item)
+{
+	obs_data_t *temp = obs_data_create();
+	obs_transform_info info{};
+	obs_sceneitem_get_info(item, &info);
+	obs_data_set_vec2(temp, "pos", &info.pos);
+	obs_data_set_vec2(temp, "scale", &info.scale);
+	obs_data_set_double(temp, "rot", info.rot);
+	obs_data_set_int(temp, "alignment", info.alignment);
+	obs_data_set_int(temp, "bounds_type", info.bounds_type);
+	obs_data_set_vec2(temp, "bounds", &info.bounds);
+	obs_data_set_int(temp, "bounds_alignment", info.bounds_alignment);
+	obs_sceneitem_crop crop{};
+	obs_sceneitem_get_crop(item, &crop);
+	obs_data_set_int(temp, "top", crop.top);
+	obs_data_set_int(temp, "bottom", crop.bottom);
+	obs_data_set_int(temp, "left", crop.left);
+	obs_data_set_int(temp, "right", crop.right);
+	return temp;
+}
+
+void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
+{
+	obs_transform_info info{};
+	obs_sceneitem_get_info(item, &info);
+	obs_data_get_vec2(data, "pos", &info.pos);
+	obs_data_get_vec2(data, "scale", &info.scale);
+	info.rot = obs_data_get_double(data, "rot");
+	info.alignment = obs_data_get_int(data, "alignment");
+	info.bounds_type =
+		(enum obs_bounds_type)obs_data_get_int(data, "bounds_type");
+	obs_data_get_vec2(data, "bounds", &info.bounds);
+	info.bounds_alignment = obs_data_get_int(data, "bounds_alignment");
+	obs_sceneitem_set_info(item, &info);
+	obs_sceneitem_crop crop{};
+	crop.top = obs_data_get_int(data, "top");
+	crop.bottom = obs_data_get_int(data, "bottom");
+	crop.left = obs_data_get_int(data, "left");
+	crop.right = obs_data_get_int(data, "right");
+	obs_sceneitem_set_crop(item, &crop);
+}
+
+static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
+			   obs_sceneitem_t *item)
 {
 	menu->clear();
+
 	obs_scene_t *scene = obs_scene_from_source(source);
 	if (!scene)
 		scene = obs_group_from_source(source);
@@ -378,7 +427,62 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source)
 			clipboard->setText(QT_UTF8(obs_data_get_json(data)));
 			obs_data_release(data);
 		});
+		if (item) {
+			menu->addSeparator();
+			a = menu->addAction(obs_module_text("LoadTransform"));
+			QObject::connect(a, &QAction::triggered, [item] {
+				QString fileName = QFileDialog::getOpenFileName(
+					nullptr,
+					QT_UTF8(obs_module_text(
+						"LoadTransform")),
+					QString(), "JSON File (*.json)");
+				if (fileName.isEmpty())
+					return;
+				obs_data_t *data =
+					obs_data_create_from_json_file(
+						QT_TO_UTF8(fileName));
+				LoadTransform(item, data);
+				obs_data_release(data);
+			});
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("PasteTransform")));
+			QObject::connect(a, &QAction::triggered, [item] {
+				QClipboard *clipboard =
+					QGuiApplication::clipboard();
+				const QString strData = clipboard->text();
+				if (strData.isEmpty())
+					return;
+				obs_data_t *data = obs_data_create_from_json(
+					QT_TO_UTF8(strData));
+				LoadTransform(item, data);
+				obs_data_release(data);
+			});
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("SaveTransform")));
+			QObject::connect(a, &QAction::triggered, [item] {
+				QString fileName = QFileDialog::getSaveFileName(
+					nullptr,
+					QT_UTF8(obs_module_text("SaveSource")),
+					QString(), "JSON File (*.json)");
+				if (fileName.isEmpty())
+					return;
+				obs_data_t *temp = GetTransformData(item);
+				obs_data_save_json(temp, QT_TO_UTF8(fileName));
+				obs_data_release(temp);
+			});
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("CopyTransform")));
+			QObject::connect(a, &QAction::triggered, [item] {
+				obs_data_t *temp = GetTransformData(item);
+				QClipboard *clipboard =
+					QGuiApplication::clipboard();
+				clipboard->setText(
+					QT_UTF8(obs_data_get_json(temp)));
+				obs_data_release(temp);
+			});
+		}
 	}
+	menu->addSeparator();
 	a = menu->addAction(QT_UTF8(obs_module_text("LoadFilter")));
 	QObject::connect(a, &QAction::triggered, [source] {
 		QString fileName = QFileDialog::getOpenFileName(
