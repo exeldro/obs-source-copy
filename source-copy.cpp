@@ -137,7 +137,7 @@ static void LoadScriptMenu(QMenu *menu)
 	auto a = menu->addAction(QT_UTF8(obs_module_text("LoadScript")));
 	QObject::connect(a, &QAction::triggered, [] {
 		QString fileName = QFileDialog::getOpenFileName(
-			nullptr, QT_UTF8(obs_module_text("LoadSource")),
+			nullptr, QT_UTF8(obs_module_text("LoadScript")),
 			QString(), "JSON File (*.json)");
 		if (fileName.isEmpty())
 			return;
@@ -185,7 +185,7 @@ static void LoadScriptMenu(QMenu *menu)
 		a = m->addAction(QT_UTF8(obs_module_text("SaveScript")));
 		QObject::connect(a, &QAction::triggered, [scriptData] {
 			const QString fileName = QFileDialog::getSaveFileName(
-				nullptr, QT_UTF8(obs_module_text("SaveSource")),
+				nullptr, QT_UTF8(obs_module_text("SaveScript")),
 				QString(), "JSON File (*.json)");
 			if (fileName.isEmpty())
 				return;
@@ -479,6 +479,109 @@ void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 	obs_sceneitem_set_crop(item, &crop);
 }
 
+static obs_source_t *obs_load_private_source(obs_data_t *source_data)
+{
+	obs_data_array_t *filters = obs_data_get_array(source_data, "filters");
+	const char *name = obs_data_get_string(source_data, "name");
+	const char *id = obs_data_get_string(source_data, "id");
+	obs_data_t *settings = obs_data_get_obj(source_data, "settings");
+
+	uint32_t prev_ver = (uint32_t)obs_data_get_int(source_data, "prev_ver");
+
+	obs_source_t *source = obs_source_create_private(id, name, settings);
+
+	const uint32_t caps = obs_source_get_output_flags(source);
+
+	obs_data_set_default_double(source_data, "volume", 1.0);
+	const auto volume = obs_data_get_double(source_data, "volume");
+	obs_source_set_volume(source, (float)volume);
+
+	obs_data_set_default_double(source_data, "balance", 0.5);
+	const auto balance = obs_data_get_double(source_data, "balance");
+	obs_source_set_balance_value(source, (float)balance);
+
+	int64_t sync = obs_data_get_int(source_data, "sync");
+	obs_source_set_sync_offset(source, sync);
+
+	obs_data_set_default_int(source_data, "mixers", 0x3F);
+	const auto mixers = (uint32_t)obs_data_get_int(source_data, "mixers");
+	obs_source_set_audio_mixers(source, mixers);
+
+	//obs_data_set_default_int(source_data, "flags", source->default_flags);
+	const auto flags = (uint32_t)obs_data_get_int(source_data, "flags");
+	obs_source_set_flags(source, flags);
+
+	obs_data_set_default_bool(source_data, "enabled", true);
+	obs_source_set_enabled(source,
+			       obs_data_get_bool(source_data, "enabled"));
+
+	obs_data_set_default_bool(source_data, "muted", false);
+	obs_source_set_muted(source, obs_data_get_bool(source_data, "muted"));
+
+	obs_data_set_default_bool(source_data, "push-to-mute", false);
+	obs_source_enable_push_to_mute(
+		source, obs_data_get_bool(source_data, "push-to-mute"));
+
+	obs_data_set_default_int(source_data, "push-to-mute-delay", 0);
+	obs_source_set_push_to_mute_delay(
+		source, obs_data_get_int(source_data, "push-to-mute-delay"));
+
+	obs_data_set_default_bool(source_data, "push-to-talk", false);
+	obs_source_enable_push_to_talk(
+		source, obs_data_get_bool(source_data, "push-to-talk"));
+
+	obs_data_set_default_int(source_data, "push-to-talk-delay", 0);
+	obs_source_set_push_to_talk_delay(
+		source, obs_data_get_int(source_data, "push-to-talk-delay"));
+
+	int di_mode = (int)obs_data_get_int(source_data, "deinterlace_mode");
+	obs_source_set_deinterlace_mode(source,
+					(enum obs_deinterlace_mode)di_mode);
+
+	int di_order =
+		(int)obs_data_get_int(source_data, "deinterlace_field_order");
+	obs_source_set_deinterlace_field_order(
+		source, (enum obs_deinterlace_field_order)di_order);
+
+	int monitoring_type =
+		(int)obs_data_get_int(source_data, "monitoring_type");
+	if (prev_ver < MAKE_SEMANTIC_VERSION(23, 2, 2)) {
+		if ((caps & OBS_SOURCE_MONITOR_BY_DEFAULT) != 0) {
+			/* updates older sources to enable monitoring
+			 * automatically if they added monitoring by default in
+			 * version 24 */
+			monitoring_type = OBS_MONITORING_TYPE_MONITOR_ONLY;
+			obs_source_set_audio_mixers(source, 0x3F);
+		}
+	}
+	obs_source_set_monitoring_type(
+		source, (enum obs_monitoring_type)monitoring_type);
+
+	if (filters) {
+		size_t count = obs_data_array_count(filters);
+
+		for (size_t i = 0; i < count; i++) {
+			obs_data_t *filter_data =
+				obs_data_array_item(filters, i);
+
+			obs_source_t *filter =
+				obs_load_private_source(filter_data);
+			if (filter) {
+				obs_source_filter_add(source, filter);
+				obs_source_release(filter);
+			}
+
+			obs_data_release(filter_data);
+		}
+
+		obs_data_array_release(filters);
+	}
+
+	obs_data_release(settings);
+
+	return source;
+}
+
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			   obs_sceneitem_t *item)
 {
@@ -616,6 +719,126 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			clipboard->setText(QT_UTF8(obs_data_get_json(temp)));
 			obs_data_release(temp);
 		});
+		menu->addSeparator();
+
+		a = menu->addAction(obs_module_text("LoadShowTransition"));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QString fileName = QFileDialog::getOpenFileName(
+				nullptr,
+				QT_UTF8(obs_module_text("LoadShowTransition")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_data_create_from_json_file(
+				QT_TO_UTF8(fileName));
+			if (const auto t = obs_load_private_source(data)) {
+				obs_sceneitem_set_show_transition(item, t);
+				obs_source_release(t);
+			}
+			obs_data_release(data);
+		});
+		a = menu->addAction(
+			QT_UTF8(obs_module_text("PasteShowTransition")));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			const QString strData = clipboard->text();
+			if (strData.isEmpty())
+				return;
+			obs_data_t *data =
+				obs_data_create_from_json(QT_TO_UTF8(strData));
+			if (const auto t = obs_load_private_source(data)) {
+				obs_sceneitem_set_show_transition(item, t);
+				obs_source_release(t);
+			}
+			obs_data_release(data);
+		});
+
+		a = menu->addAction(obs_module_text("LoadHideTransition"));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QString fileName = QFileDialog::getOpenFileName(
+				nullptr,
+				QT_UTF8(obs_module_text("LoadHideTransition")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_data_create_from_json_file(
+				QT_TO_UTF8(fileName));
+			if (const auto t = obs_load_private_source(data)) {
+				obs_sceneitem_set_hide_transition(item, t);
+				obs_source_release(t);
+			}
+			obs_data_release(data);
+		});
+		a = menu->addAction(
+			QT_UTF8(obs_module_text("PasteHideTransition")));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			const QString strData = clipboard->text();
+			if (strData.isEmpty())
+				return;
+			obs_data_t *data =
+				obs_data_create_from_json(QT_TO_UTF8(strData));
+			if (const auto t = obs_load_private_source(data)) {
+				obs_sceneitem_set_hide_transition(item, t);
+				obs_source_release(t);
+			}
+			obs_data_release(data);
+		});
+
+		auto st = obs_sceneitem_get_show_transition(item);
+		if (st) {
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("SaveShowTransition")));
+			QObject::connect(a, &QAction::triggered, [st] {
+				QString fileName = QFileDialog::getSaveFileName(
+					nullptr,
+					QT_UTF8(obs_module_text(
+						"SaveShowTransition")),
+					QString(), "JSON File (*.json)");
+				if (fileName.isEmpty())
+					return;
+				obs_data_t *temp = obs_save_source(st);
+				obs_data_save_json(temp, QT_TO_UTF8(fileName));
+				obs_data_release(temp);
+			});
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("CopyShowTransition")));
+			QObject::connect(a, &QAction::triggered, [st] {
+				obs_data_t *temp = obs_save_source(st);
+				QClipboard *clipboard =
+					QGuiApplication::clipboard();
+				clipboard->setText(
+					QT_UTF8(obs_data_get_json(temp)));
+				obs_data_release(temp);
+			});
+		}
+		auto ht = obs_sceneitem_get_hide_transition(item);
+		if (ht) {
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("SaveHideTransition")));
+			QObject::connect(a, &QAction::triggered, [ht] {
+				QString fileName = QFileDialog::getSaveFileName(
+					nullptr,
+					QT_UTF8(obs_module_text(
+						"SaveHideTransition")),
+					QString(), "JSON File (*.json)");
+				if (fileName.isEmpty())
+					return;
+				obs_data_t *temp = obs_save_source(ht);
+				obs_data_save_json(temp, QT_TO_UTF8(fileName));
+				obs_data_release(temp);
+			});
+			a = menu->addAction(
+				QT_UTF8(obs_module_text("CopyHideTransition")));
+			QObject::connect(a, &QAction::triggered, [ht] {
+				obs_data_t *temp = obs_save_source(ht);
+				QClipboard *clipboard =
+					QGuiApplication::clipboard();
+				clipboard->setText(
+					QT_UTF8(obs_data_get_json(temp)));
+				obs_data_release(temp);
+			});
+		}
 	}
 	menu->addSeparator();
 	a = menu->addAction(QT_UTF8(obs_module_text("LoadFilter")));
