@@ -9,6 +9,8 @@
 #include <QWidgetAction>
 
 #include "version.h"
+#include "util/config-file.h"
+#include "util/platform.h"
 
 #define QT_UTF8(str) QString::fromUtf8(str)
 #define QT_TO_UTF8(str) str.toUtf8().constData()
@@ -64,6 +66,142 @@ static void LoadScene(obs_data_t *data)
 	obs_data_array_release(sourcesData);
 }
 
+obs_data_array_t *GetScriptsData()
+{
+	const auto config = obs_frontend_get_global_config();
+	if (!config)
+		return nullptr;
+	const std::string sceneCollection =
+		config_get_string(config, "Basic", "SceneCollection");
+	const std::string filename =
+		config_get_string(config, "Basic", "SceneCollectionFile");
+	std::string path = obs_module_config_path("../../basic/scenes/");
+	path += filename;
+	path += ".json";
+
+	obs_frontend_save();
+	auto data = obs_data_create_from_json_file(path.c_str());
+	if (!data)
+		return nullptr;
+
+	auto modules = obs_data_get_obj(data, "modules");
+	auto scripts = obs_data_get_array(modules, "scripts-tool");
+	obs_data_release(modules);
+	obs_data_release(data);
+	return scripts;
+}
+
+void LoadScriptData(obs_data_t *script_data)
+{
+	const auto config = obs_frontend_get_global_config();
+	if (!config)
+		return;
+
+	obs_frontend_save();
+	const std::string sceneCollection =
+		config_get_string(config, "Basic", "SceneCollection");
+	const std::string filename =
+		config_get_string(config, "Basic", "SceneCollectionFile");
+	std::string path = obs_module_config_path("../../basic/scenes/");
+	path += filename;
+	path += ".json";
+
+	auto data = obs_data_create_from_json_file(path.c_str());
+	if (!data)
+		return;
+
+	auto modules = obs_data_get_obj(data, "modules");
+	auto scripts = obs_data_get_array(modules, "scripts-tool");
+	obs_data_release(modules);
+	if (scripts) {
+		obs_data_array_push_back(scripts, script_data);
+		obs_data_array_release(scripts);
+		obs_data_save_json_safe(data, path.c_str(), "tmp", "bak");
+		obs_data_release(data);
+		config_set_string(config, "Basic", "SceneCollection", "");
+		config_set_string(config, "Basic", "SceneCollectionFile",
+				  "source_copy_temp");
+		obs_frontend_set_current_scene_collection(
+			sceneCollection.c_str());
+		std::string temp_path = obs_module_config_path(
+			"../../basic/scenes/scene_collection_manager_temp.json");
+		os_unlink(temp_path.c_str());
+	} else {
+		obs_data_release(data);
+	}
+}
+
+static void LoadScriptMenu(QMenu *menu)
+{
+	menu->clear();
+	auto a = menu->addAction(QT_UTF8(obs_module_text("LoadScript")));
+	QObject::connect(a, &QAction::triggered, [] {
+		QString fileName = QFileDialog::getOpenFileName(
+			nullptr, QT_UTF8(obs_module_text("LoadSource")),
+			QString(), "JSON File (*.json)");
+		if (fileName.isEmpty())
+			return;
+		obs_data_t *data =
+			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
+		if (!data)
+			return;
+		LoadScriptData(data);
+		obs_data_release(data);
+	});
+	a = menu->addAction(QT_UTF8(obs_module_text("PasteScript")));
+	QObject::connect(a, &QAction::triggered, [] {
+		QClipboard *clipboard = QGuiApplication::clipboard();
+		const QString strData = clipboard->text();
+		if (strData.isEmpty())
+			return;
+		const auto data =
+			obs_data_create_from_json(QT_TO_UTF8(strData));
+		if (!data)
+			return;
+		LoadScriptData(data);
+		obs_data_release(data);
+	});
+
+	const auto scripts = GetScriptsData();
+	if (!scripts)
+		return;
+
+	menu->addSeparator();
+	const size_t size = obs_data_array_count(scripts);
+	for (size_t i = 0; i < size; i++) {
+		auto script = obs_data_array_item(scripts, i);
+		const char *script_path = obs_data_get_string(script, "path");
+		const char *slash = script_path && *script_path
+					    ? strrchr(script_path, '/')
+					    : nullptr;
+		QMenu *m;
+		if (slash) {
+			slash++;
+			m = menu->addMenu(QT_UTF8(slash));
+		} else {
+			m = menu->addMenu(QT_UTF8(script_path));
+		}
+		QString scriptData = QT_UTF8(obs_data_get_json(script));
+		a = m->addAction(QT_UTF8(obs_module_text("SaveScript")));
+		QObject::connect(a, &QAction::triggered, [scriptData] {
+			const QString fileName = QFileDialog::getSaveFileName(
+				nullptr, QT_UTF8(obs_module_text("SaveSource")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			auto d = QT_TO_UTF8(scriptData);
+			os_quick_write_utf8_file(QT_TO_UTF8(fileName), d,
+						 strlen(d), false);
+		});
+		a = m->addAction(QT_UTF8(obs_module_text("CopyScript")));
+		QObject::connect(a, &QAction::triggered, [scriptData] {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			clipboard->setText(scriptData);
+		});
+	}
+	obs_data_array_release(scripts);
+}
+
 static void LoadMenu(QMenu *menu)
 {
 	menu->clear();
@@ -111,6 +249,12 @@ static void LoadMenu(QMenu *menu)
 	}
 
 	obs_frontend_source_list_free(&scenes);
+
+	menu->addSeparator();
+
+	QMenu *submenu = menu->addMenu(QT_UTF8(obs_module_text("Scripts")));
+	QObject::connect(submenu, &QMenu::aboutToShow,
+			 [submenu] { LoadScriptMenu(submenu); });
 }
 
 void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
@@ -385,7 +529,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			clipboard->setText(QT_UTF8(obs_data_get_json(data)));
 			obs_data_release(data);
 		});
-		a = menu->addAction(obs_module_text("LoadSource"));
+		a = menu->addAction(QT_UTF8(obs_module_text("LoadSource")));
 		QObject::connect(a, &QAction::triggered, [scene] {
 			QString fileName = QFileDialog::getOpenFileName(
 				nullptr, QT_UTF8(obs_module_text("LoadSource")),
@@ -427,60 +571,51 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			clipboard->setText(QT_UTF8(obs_data_get_json(data)));
 			obs_data_release(data);
 		});
-		if (item) {
-			menu->addSeparator();
-			a = menu->addAction(obs_module_text("LoadTransform"));
-			QObject::connect(a, &QAction::triggered, [item] {
-				QString fileName = QFileDialog::getOpenFileName(
-					nullptr,
-					QT_UTF8(obs_module_text(
-						"LoadTransform")),
-					QString(), "JSON File (*.json)");
-				if (fileName.isEmpty())
-					return;
-				obs_data_t *data =
-					obs_data_create_from_json_file(
-						QT_TO_UTF8(fileName));
-				LoadTransform(item, data);
-				obs_data_release(data);
-			});
-			a = menu->addAction(
-				QT_UTF8(obs_module_text("PasteTransform")));
-			QObject::connect(a, &QAction::triggered, [item] {
-				QClipboard *clipboard =
-					QGuiApplication::clipboard();
-				const QString strData = clipboard->text();
-				if (strData.isEmpty())
-					return;
-				obs_data_t *data = obs_data_create_from_json(
-					QT_TO_UTF8(strData));
-				LoadTransform(item, data);
-				obs_data_release(data);
-			});
-			a = menu->addAction(
-				QT_UTF8(obs_module_text("SaveTransform")));
-			QObject::connect(a, &QAction::triggered, [item] {
-				QString fileName = QFileDialog::getSaveFileName(
-					nullptr,
-					QT_UTF8(obs_module_text("SaveSource")),
-					QString(), "JSON File (*.json)");
-				if (fileName.isEmpty())
-					return;
-				obs_data_t *temp = GetTransformData(item);
-				obs_data_save_json(temp, QT_TO_UTF8(fileName));
-				obs_data_release(temp);
-			});
-			a = menu->addAction(
-				QT_UTF8(obs_module_text("CopyTransform")));
-			QObject::connect(a, &QAction::triggered, [item] {
-				obs_data_t *temp = GetTransformData(item);
-				QClipboard *clipboard =
-					QGuiApplication::clipboard();
-				clipboard->setText(
-					QT_UTF8(obs_data_get_json(temp)));
-				obs_data_release(temp);
-			});
-		}
+	}
+	if (item) {
+		menu->addSeparator();
+		a = menu->addAction(obs_module_text("LoadTransform"));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QString fileName = QFileDialog::getOpenFileName(
+				nullptr,
+				QT_UTF8(obs_module_text("LoadTransform")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *data = obs_data_create_from_json_file(
+				QT_TO_UTF8(fileName));
+			LoadTransform(item, data);
+			obs_data_release(data);
+		});
+		a = menu->addAction(QT_UTF8(obs_module_text("PasteTransform")));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			const QString strData = clipboard->text();
+			if (strData.isEmpty())
+				return;
+			obs_data_t *data =
+				obs_data_create_from_json(QT_TO_UTF8(strData));
+			LoadTransform(item, data);
+			obs_data_release(data);
+		});
+		a = menu->addAction(QT_UTF8(obs_module_text("SaveTransform")));
+		QObject::connect(a, &QAction::triggered, [item] {
+			QString fileName = QFileDialog::getSaveFileName(
+				nullptr, QT_UTF8(obs_module_text("SaveSource")),
+				QString(), "JSON File (*.json)");
+			if (fileName.isEmpty())
+				return;
+			obs_data_t *temp = GetTransformData(item);
+			obs_data_save_json(temp, QT_TO_UTF8(fileName));
+			obs_data_release(temp);
+		});
+		a = menu->addAction(QT_UTF8(obs_module_text("CopyTransform")));
+		QObject::connect(a, &QAction::triggered, [item] {
+			obs_data_t *temp = GetTransformData(item);
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			clipboard->setText(QT_UTF8(obs_data_get_json(temp)));
+			obs_data_release(temp);
+		});
 	}
 	menu->addSeparator();
 	a = menu->addAction(QT_UTF8(obs_module_text("LoadFilter")));
