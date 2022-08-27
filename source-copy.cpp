@@ -260,6 +260,9 @@ static void LoadMenu(QMenu *menu)
 void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
 		   bool pressed)
 {
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(id);
+	UNUSED_PARAMETER(hotkey);
 	if (!pressed)
 		return;
 	const auto main_window =
@@ -275,6 +278,9 @@ void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
 void PasteTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey,
 		    bool pressed)
 {
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(id);
+	UNUSED_PARAMETER(hotkey);
 	if (!pressed)
 		return;
 	const auto main_window =
@@ -353,6 +359,7 @@ MODULE_EXPORT const char *obs_module_name(void)
 
 static void AddFilterMenu(obs_source_t *parent, obs_source_t *child, void *data)
 {
+	UNUSED_PARAMETER(parent);
 	QMenu *menu = static_cast<QMenu *>(data);
 	QMenu *submenu = menu->addMenu(QT_UTF8(obs_source_get_name(child)));
 	QAction *a = submenu->addAction(QT_UTF8(obs_module_text("SaveFilter")));
@@ -378,6 +385,7 @@ static void AddFilterMenu(obs_source_t *parent, obs_source_t *child, void *data)
 static bool AddSceneItemToMenu(obs_scene_t *scene, obs_sceneitem_t *item,
 			       void *data)
 {
+	UNUSED_PARAMETER(scene);
 	QMenu *menu = static_cast<QMenu *>(data);
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	QMenu *submenu = menu->addMenu(obs_source_get_name(source));
@@ -389,6 +397,7 @@ static bool AddSceneItemToMenu(obs_scene_t *scene, obs_sceneitem_t *item,
 
 static bool SaveSource(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
 {
+	UNUSED_PARAMETER(scene);
 	obs_data_array_t *sources = static_cast<obs_data_array_t *>(data);
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	if (!source)
@@ -477,109 +486,6 @@ void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 	crop.left = obs_data_get_int(data, "left");
 	crop.right = obs_data_get_int(data, "right");
 	obs_sceneitem_set_crop(item, &crop);
-}
-
-static obs_source_t *obs_load_private_source(obs_data_t *source_data)
-{
-	obs_data_array_t *filters = obs_data_get_array(source_data, "filters");
-	const char *name = obs_data_get_string(source_data, "name");
-	const char *id = obs_data_get_string(source_data, "id");
-	obs_data_t *settings = obs_data_get_obj(source_data, "settings");
-
-	uint32_t prev_ver = (uint32_t)obs_data_get_int(source_data, "prev_ver");
-
-	obs_source_t *source = obs_source_create_private(id, name, settings);
-
-	const uint32_t caps = obs_source_get_output_flags(source);
-
-	obs_data_set_default_double(source_data, "volume", 1.0);
-	const auto volume = obs_data_get_double(source_data, "volume");
-	obs_source_set_volume(source, (float)volume);
-
-	obs_data_set_default_double(source_data, "balance", 0.5);
-	const auto balance = obs_data_get_double(source_data, "balance");
-	obs_source_set_balance_value(source, (float)balance);
-
-	int64_t sync = obs_data_get_int(source_data, "sync");
-	obs_source_set_sync_offset(source, sync);
-
-	obs_data_set_default_int(source_data, "mixers", 0x3F);
-	const auto mixers = (uint32_t)obs_data_get_int(source_data, "mixers");
-	obs_source_set_audio_mixers(source, mixers);
-
-	//obs_data_set_default_int(source_data, "flags", source->default_flags);
-	const auto flags = (uint32_t)obs_data_get_int(source_data, "flags");
-	obs_source_set_flags(source, flags);
-
-	obs_data_set_default_bool(source_data, "enabled", true);
-	obs_source_set_enabled(source,
-			       obs_data_get_bool(source_data, "enabled"));
-
-	obs_data_set_default_bool(source_data, "muted", false);
-	obs_source_set_muted(source, obs_data_get_bool(source_data, "muted"));
-
-	obs_data_set_default_bool(source_data, "push-to-mute", false);
-	obs_source_enable_push_to_mute(
-		source, obs_data_get_bool(source_data, "push-to-mute"));
-
-	obs_data_set_default_int(source_data, "push-to-mute-delay", 0);
-	obs_source_set_push_to_mute_delay(
-		source, obs_data_get_int(source_data, "push-to-mute-delay"));
-
-	obs_data_set_default_bool(source_data, "push-to-talk", false);
-	obs_source_enable_push_to_talk(
-		source, obs_data_get_bool(source_data, "push-to-talk"));
-
-	obs_data_set_default_int(source_data, "push-to-talk-delay", 0);
-	obs_source_set_push_to_talk_delay(
-		source, obs_data_get_int(source_data, "push-to-talk-delay"));
-
-	int di_mode = (int)obs_data_get_int(source_data, "deinterlace_mode");
-	obs_source_set_deinterlace_mode(source,
-					(enum obs_deinterlace_mode)di_mode);
-
-	int di_order =
-		(int)obs_data_get_int(source_data, "deinterlace_field_order");
-	obs_source_set_deinterlace_field_order(
-		source, (enum obs_deinterlace_field_order)di_order);
-
-	int monitoring_type =
-		(int)obs_data_get_int(source_data, "monitoring_type");
-	if (prev_ver < MAKE_SEMANTIC_VERSION(23, 2, 2)) {
-		if ((caps & OBS_SOURCE_MONITOR_BY_DEFAULT) != 0) {
-			/* updates older sources to enable monitoring
-			 * automatically if they added monitoring by default in
-			 * version 24 */
-			monitoring_type = OBS_MONITORING_TYPE_MONITOR_ONLY;
-			obs_source_set_audio_mixers(source, 0x3F);
-		}
-	}
-	obs_source_set_monitoring_type(
-		source, (enum obs_monitoring_type)monitoring_type);
-
-	if (filters) {
-		size_t count = obs_data_array_count(filters);
-
-		for (size_t i = 0; i < count; i++) {
-			obs_data_t *filter_data =
-				obs_data_array_item(filters, i);
-
-			obs_source_t *filter =
-				obs_load_private_source(filter_data);
-			if (filter) {
-				obs_source_filter_add(source, filter);
-				obs_source_release(filter);
-			}
-
-			obs_data_release(filter_data);
-		}
-
-		obs_data_array_release(filters);
-	}
-
-	obs_data_release(settings);
-
-	return source;
 }
 
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
@@ -764,7 +670,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			obs_data_t *data = obs_data_create_from_json_file(
 				QT_TO_UTF8(fileName));
 			if (const auto t = obs_load_private_source(data)) {
-				obs_sceneitem_set_hide_transition(item, t);
+				obs_sceneitem_set_transition(item, false, t);
 				obs_source_release(t);
 			}
 			obs_data_release(data);
@@ -779,13 +685,13 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			obs_data_t *data =
 				obs_data_create_from_json(QT_TO_UTF8(strData));
 			if (const auto t = obs_load_private_source(data)) {
-				obs_sceneitem_set_hide_transition(item, t);
+				obs_sceneitem_set_transition(item, false, t);
 				obs_source_release(t);
 			}
 			obs_data_release(data);
 		});
 
-		auto st = obs_sceneitem_get_show_transition(item);
+		auto st = obs_sceneitem_get_transition(item, true);
 		if (st) {
 			a = menu->addAction(
 				QT_UTF8(obs_module_text("SaveShowTransition")));
@@ -812,7 +718,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 				obs_data_release(temp);
 			});
 		}
-		auto ht = obs_sceneitem_get_hide_transition(item);
+		auto ht = obs_sceneitem_get_transition(item, false);
 		if (ht) {
 			a = menu->addAction(
 				QT_UTF8(obs_module_text("SaveHideTransition")));
