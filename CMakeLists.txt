@@ -8,6 +8,11 @@ endif()
 
 project(source-copy VERSION 0.2.1)
 set(PROJECT_FULL_NAME "Source Copy")
+
+# Set new UUIDs when you start to create a new plugin.
+set(MACOS_PACKAGE_UUID "FB542D18-86CC-403A-A284-77167E761685")
+set(MACOS_INSTALLER_UUID "C4D6AC2A-0D9A-4CFC-9E55-A3F22A60393E")
+
 add_library(${PROJECT_NAME} MODULE)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/version.h)
