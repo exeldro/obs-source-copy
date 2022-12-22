@@ -19,6 +19,146 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("Exeldro");
 OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
+#define MAX_PATH 260
+
+static bool replace(std::string &str, const char *from, const char *to)
+{
+	size_t start_pos = str.find(from);
+	if (start_pos == std::string::npos)
+		return false;
+	str.replace(start_pos, strlen(from), to);
+	return true;
+}
+
+static void try_fix_paths(obs_data_t *data, const char *dir, char *path_buffer)
+{
+	obs_data_item_t *item = obs_data_first(data);
+	while (item) {
+		const enum obs_data_type type = obs_data_item_gettype(item);
+		if (type == OBS_DATA_STRING) {
+			std::string str = obs_data_item_get_string(item);
+			bool edit = false;
+			if (replace(str, "[U_COMBOBULATOR_PATH]", dir)) {
+				obs_data_item_set_string(&item, str.c_str());
+				edit = true;
+			}
+			bool local_url = false;
+			if (str.substr(0, 7) == "file://") {
+				str = str.substr(7);
+				local_url = true;
+			}
+			std::size_t found = str.find_last_of("/\\");
+			if (str.length() < MAX_PATH &&
+			    found != std::string::npos &&
+			    !os_file_exists(str.c_str())) {
+				while (found != std::string::npos) {
+					auto file =
+						found == 0 && str[0] != '/' &&
+								str[0] != '\\'
+							? str
+							: str.substr(found + 1);
+					if (file.find('.') == std::string::npos)
+						break;
+					auto oldDir = str.substr(0, found + 1);
+					std::string newFile = dir;
+					newFile += file;
+					if (os_file_exists(newFile.c_str())) {
+						if (local_url) {
+							str = "file://";
+							if (os_get_abs_path(
+								    newFile.c_str(),
+								    path_buffer,
+								    MAX_PATH)) {
+								for (auto i = 0;
+								     path_buffer
+									     [i] !=
+								     '\0';
+								     i++)
+									if (path_buffer
+										    [i] ==
+									    '\\')
+										path_buffer[i] =
+											'/';
+								str += path_buffer;
+							}
+						} else {
+							if (os_get_abs_path(
+								    newFile.c_str(),
+								    path_buffer,
+								    MAX_PATH)) {
+								for (auto i = 0;
+								     path_buffer
+									     [i] !=
+								     '\0';
+								     i++)
+									if (path_buffer
+										    [i] ==
+									    '\\')
+										path_buffer[i] =
+											'/';
+								str = path_buffer;
+							} else {
+								str = "";
+							}
+						}
+						obs_data_item_set_string(
+							&item, str.c_str());
+						edit = true;
+						break;
+					}
+					if (found == 0) {
+						found = std::string::npos;
+					} else {
+						found = str.find_last_of(
+							"/\\", found - 1);
+						if (found ==
+						    std::string::npos) {
+							found = 0;
+						}
+					}
+				}
+			}
+			if (edit) {
+				item = obs_data_first(data);
+				continue;
+			}
+		} else if (type == OBS_DATA_OBJECT) {
+			if (obs_data_t *obj = obs_data_item_get_obj(item)) {
+				try_fix_paths(obj, dir, path_buffer);
+				obs_data_release(obj);
+			}
+		} else if (type == OBS_DATA_ARRAY) {
+			const auto array = obs_data_item_get_array(item);
+			const auto count = obs_data_array_count(array);
+			for (size_t i = 0; i < count; i++) {
+				if (obs_data_t *obj =
+					    obs_data_array_item(array, i)) {
+					try_fix_paths(obj, dir, path_buffer);
+					obs_data_release(obj);
+				}
+			}
+		}
+		obs_data_item_next(&item);
+	}
+}
+
+static void try_fix_paths(obs_data_t *data, QString fileName)
+{
+	char path_buffer[MAX_PATH];
+	std::string dir = QT_TO_UTF8(fileName);
+	const std::size_t slash = dir.find_last_of("/\\");
+	if (slash != std::string::npos) {
+		auto point = dir.find_last_of('.');
+		if (point != std::string::npos && point > slash) {
+			dir = dir.substr(0, point);
+			dir += "/";
+			try_fix_paths(data, dir.c_str(), path_buffer);
+		}
+		dir = dir.substr(0, slash + 1);
+	}
+	try_fix_paths(data, dir.c_str(), path_buffer);
+}
+
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			   obs_sceneitem_t *item);
 
@@ -214,6 +354,7 @@ static void LoadMenu(QMenu *menu)
 			return;
 		obs_data_t *data =
 			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
+		try_fix_paths(data, fileName);
 		LoadScene(data);
 		obs_data_release(data);
 	});
@@ -547,6 +688,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 				return;
 			obs_data_t *data = obs_data_create_from_json_file(
 				QT_TO_UTF8(fileName));
+			try_fix_paths(data, fileName);
 			LoadSource(scene, data);
 			obs_data_release(data);
 		});
