@@ -285,6 +285,7 @@ static void LoadScriptMenu(QMenu *menu)
 			obs_data_create_from_json_file(QT_TO_UTF8(fileName));
 		if (!data)
 			return;
+		try_fix_paths(data, fileName);
 		LoadScriptData(data);
 		obs_data_release(data);
 	});
@@ -904,6 +905,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 		obs_source_t *filter =
 			obs_source_get_filter_by_name(source, name);
 		if (!filter) {
+			try_fix_paths(data, fileName);
 			filter = obs_load_source(data);
 			if (filter && obs_source_get_type(filter) ==
 					      OBS_SOURCE_TYPE_FILTER) {
