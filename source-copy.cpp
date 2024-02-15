@@ -564,7 +564,8 @@ static bool SaveSource(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
 	return true;
 }
 
-static void LoadSingleSource(obs_scene_t* scene, obs_data_t* data) {
+static void LoadSingleSource(obs_scene_t *scene, obs_data_t *data)
+{
 	const char *name = obs_data_get_string(data, "name");
 	obs_source_t *source = obs_get_source_by_name(name);
 	if (!source)
@@ -594,7 +595,6 @@ static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 		} else {
 			LoadSingleSource(scene, data);
 		}
-
 	}
 }
 
@@ -984,6 +984,7 @@ static void *vendor;
 void websocket_add_scene(obs_data_t *request_data, obs_data_t *response_data,
 			 void *param)
 {
+	UNUSED_PARAMETER(param);
 	LoadScene(request_data);
 	obs_data_set_bool(response_data, "success", true);
 }
