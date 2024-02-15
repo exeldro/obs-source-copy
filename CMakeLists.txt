@@ -9,7 +9,7 @@ else()
   cmake_minimum_required(VERSION 3.18)
 endif()
 
-project(source-copy VERSION 0.2.2)
+project(source-copy VERSION 0.2.3)
 set(PROJECT_FULL_NAME "Source Copy")
 
 # Set new UUIDs when you start to create a new plugin.
@@ -23,6 +23,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_D
 target_sources(${PROJECT_NAME} PRIVATE
 source-copy.cpp
 	source-copy.hpp
+	obs-websocket-api.h
 	version.h)
 
 if(BUILD_OUT_OF_TREE)

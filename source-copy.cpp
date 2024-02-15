@@ -11,6 +11,7 @@
 #include "version.h"
 #include "util/config-file.h"
 #include "util/platform.h"
+#include "obs-websocket-api.h"
 
 #define QT_UTF8(str) QString::fromUtf8(str)
 #define QT_TO_UTF8(str) str.toUtf8().constData()
@@ -563,6 +564,20 @@ static bool SaveSource(obs_scene_t *scene, obs_sceneitem_t *item, void *data)
 	return true;
 }
 
+static void LoadSingleSource(obs_scene_t* scene, obs_data_t* data) {
+	const char *name = obs_data_get_string(data, "name");
+	obs_source_t *source = obs_get_source_by_name(name);
+	if (!source)
+		source = obs_load_source(data);
+	if (source) {
+		if (obs_source_get_type(source) == OBS_SOURCE_TYPE_INPUT) {
+			obs_scene_add(scene, source);
+			obs_source_load(source);
+		}
+		obs_source_release(source);
+	}
+}
+
 static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 {
 	if (!data)
@@ -572,20 +587,15 @@ static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 		LoadSources(sourcesData);
 		obs_data_array_release(sourcesData);
 	} else {
-		const char *name = obs_data_get_string(data, "name");
-		obs_source_t *source = obs_get_source_by_name(name);
-		if (!source)
-			source = obs_load_source(data);
-		if (source) {
-			if (obs_source_get_type(source) ==
-			    OBS_SOURCE_TYPE_INPUT) {
-				obs_scene_add(scene, source);
-				obs_source_load(source);
-			}
-			obs_source_release(source);
+		obs_data_t *sourceData = obs_data_get_obj(data, "source");
+		if (sourceData) {
+			LoadSingleSource(scene, sourceData);
+			obs_data_release(sourceData);
+		} else {
+			LoadSingleSource(scene, data);
 		}
+
 	}
-	obs_data_release(data);
 }
 
 static obs_data_t *GetTransformData(obs_sceneitem_t *item)
@@ -967,4 +977,139 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 		menu->removeAction(wa);
 		delete wa;
 	}
+}
+
+static void *vendor;
+
+void websocket_add_scene(obs_data_t *request_data, obs_data_t *response_data,
+			 void *param)
+{
+	LoadScene(request_data);
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void websocket_get_current_scene(obs_data_t *request_data,
+				 obs_data_t *response_data, void *param)
+{
+	UNUSED_PARAMETER(param);
+	UNUSED_PARAMETER(request_data);
+	obs_source_t *source = obs_frontend_get_current_scene();
+	if (!source) {
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_scene_t *scene = obs_scene_from_source(source);
+	obs_data_array_t *sources = obs_data_array_create();
+	obs_data_set_array(response_data, "sources", sources);
+	obs_scene_enum_items(scene, SaveSource, sources);
+	obs_data_t *sceneData = obs_save_source(source);
+	obs_data_array_push_back(sources, sceneData);
+	obs_data_release(sceneData);
+	obs_source_release(source);
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void websocket_get_scene(obs_data_t *request_data, obs_data_t *response_data,
+			 void *param)
+{
+	UNUSED_PARAMETER(param);
+	const char *name = obs_data_get_string(request_data, "scene");
+	if (!name || !strlen(name)) {
+		obs_data_set_string(response_data, "error", "scene not set");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+
+	obs_source_t *source = obs_get_source_by_name(name);
+	if (!source) {
+		obs_data_set_string(response_data, "error", "scene not found");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_scene_t *scene = obs_scene_from_source(source);
+	if (!scene) {
+		obs_source_release(source);
+		obs_data_set_string(response_data, "error", "not a scene");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_data_array_t *sources = obs_data_array_create();
+	obs_data_set_array(response_data, "sources", sources);
+	obs_scene_enum_items(scene, SaveSource, sources);
+	obs_data_t *sceneData = obs_save_source(source);
+	obs_data_array_push_back(sources, sceneData);
+	obs_data_release(sceneData);
+	obs_source_release(source);
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void websocket_get_source(obs_data_t *request_data, obs_data_t *response_data,
+			  void *param)
+{
+	UNUSED_PARAMETER(param);
+	const char *name = obs_data_get_string(request_data, "source");
+	if (!name || !strlen(name)) {
+		obs_data_set_string(response_data, "error", "source not set");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+
+	obs_source_t *source = obs_get_source_by_name(name);
+	if (!source) {
+		obs_data_set_string(response_data, "error", "source not found");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_data_t *data = obs_save_source(source);
+	obs_data_set_obj(response_data, "source", data);
+	obs_data_release(data);
+	obs_source_release(source);
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void websocket_add_source(obs_data_t *request_data, obs_data_t *response_data,
+			  void *param)
+{
+	UNUSED_PARAMETER(param);
+	obs_source_t *source = nullptr;
+	const char *name = obs_data_get_string(request_data, "scene");
+	if (!name || !strlen(name)) {
+		source = obs_get_source_by_name(name);
+	} else {
+		source = obs_frontend_get_current_scene();
+	}
+	if (!source) {
+		obs_data_set_string(response_data, "error", "scene not found");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_scene_t *scene = obs_scene_from_source(source);
+	if (!scene) {
+		obs_source_release(source);
+		obs_data_set_string(response_data, "error", "not a scene");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	LoadSource(scene, request_data);
+	obs_source_release(source);
+	obs_data_set_bool(response_data, "success", true);
+}
+
+void obs_module_post_load(void)
+{
+	vendor = obs_websocket_register_vendor("source-copy");
+	if (!vendor)
+		return;
+	obs_websocket_vendor_register_request(vendor, "get_current_scene",
+					      websocket_get_current_scene,
+					      nullptr);
+	obs_websocket_vendor_register_request(vendor, "get_scene",
+					      websocket_get_scene, nullptr);
+	obs_websocket_vendor_register_request(vendor, "add_scene",
+					      websocket_add_scene, nullptr);
+
+	obs_websocket_vendor_register_request(vendor, "get_source",
+					      websocket_get_source, nullptr);
+	obs_websocket_vendor_register_request(vendor, "add_source",
+					      websocket_add_source, nullptr);
 }
