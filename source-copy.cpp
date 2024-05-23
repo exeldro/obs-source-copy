@@ -602,7 +602,12 @@ static obs_data_t *GetTransformData(obs_sceneitem_t *item)
 {
 	obs_data_t *temp = obs_data_create();
 	obs_transform_info info{};
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
 	obs_sceneitem_get_info(item, &info);
+#else
+	obs_sceneitem_get_info2(item, &info);
+	obs_data_set_bool(temp, "crop_to_bounds", info.crop_to_bounds);
+#endif
 	obs_data_set_vec2(temp, "pos", &info.pos);
 	obs_data_set_vec2(temp, "scale", &info.scale);
 	obs_data_set_double(temp, "rot", info.rot);
@@ -622,7 +627,12 @@ static obs_data_t *GetTransformData(obs_sceneitem_t *item)
 void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 {
 	obs_transform_info info{};
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
 	obs_sceneitem_get_info(item, &info);
+#else
+	obs_sceneitem_get_info2(item, &info);
+	info.crop_to_bounds = obs_data_get_bool(data, "crop_to_bounds");
+#endif
 	obs_data_get_vec2(data, "pos", &info.pos);
 	obs_data_get_vec2(data, "scale", &info.scale);
 	info.rot = obs_data_get_double(data, "rot");
@@ -631,7 +641,11 @@ void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 		(enum obs_bounds_type)obs_data_get_int(data, "bounds_type");
 	obs_data_get_vec2(data, "bounds", &info.bounds);
 	info.bounds_alignment = obs_data_get_int(data, "bounds_alignment");
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
 	obs_sceneitem_set_info(item, &info);
+#else
+	obs_sceneitem_set_info2(item, &info);
+#endif
 	obs_sceneitem_crop crop{};
 	crop.top = obs_data_get_int(data, "top");
 	crop.bottom = obs_data_get_int(data, "bottom");
