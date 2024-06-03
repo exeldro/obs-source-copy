@@ -7,6 +7,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QWidgetAction>
+#include <QLineEdit>
 
 #include "version.h"
 #include "util/config-file.h"
@@ -335,6 +336,23 @@ static void LoadMenu(QMenu *menu)
 
 	struct obs_frontend_source_list scenes = {};
 	obs_frontend_get_scenes(&scenes);
+	wa = new QWidgetAction(menu);
+	auto t = new QLineEdit;
+	t->connect(t, &QLineEdit::textChanged, [menu](const QString text) {
+		foreach(auto action, menu->actions())
+		{
+			if (!action->menu())
+				continue;
+			if (text.isEmpty() || action->text() == QT_UTF8(obs_module_text("Scripts"))) {
+				action->setVisible(true);
+			} else {
+				action->setVisible(action->text().contains(text, Qt::CaseInsensitive));
+			}
+		}
+	});
+	wa->setDefaultWidget(t);
+	menu->addAction(wa);
+
 	for (size_t i = 0; i < scenes.sources.num; i++) {
 		obs_source_t *source = scenes.sources.array[i];
 		QMenu *submenu = menu->addMenu(obs_source_get_name(scenes.sources.array[i]));
