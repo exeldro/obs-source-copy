@@ -9,7 +9,7 @@ else()
   cmake_minimum_required(VERSION 3.18)
 endif()
 
-project(source-copy VERSION 0.2.3)
+project(source-copy VERSION 0.2.4)
 set(PROJECT_FULL_NAME "Source Copy")
 
 # Set new UUIDs when you start to create a new plugin.
@@ -30,8 +30,14 @@ if(BUILD_OUT_OF_TREE)
 	find_package(libobs REQUIRED)
 	find_package(obs-frontend-api REQUIRED)
 	include(cmake/ObsPluginHelpers.cmake)
+	find_qt(COMPONENTS Widgets COMPONENTS_LINUX Gui)
 	set(OBS_FRONTEND_API_NAME "obs-frontend-api")
 else()
+	if(OBS_VERSION VERSION_GREATER_EQUAL 30.1.0)
+		find_package(Qt6 COMPONENTS Core Widgets)
+	else()
+		find_qt(COMPONENTS Widgets COMPONENTS_LINUX Gui)
+	endif()
 	set(OBS_FRONTEND_API_NAME "frontend-api")
 endif()
   
@@ -57,8 +63,6 @@ elseif(OS_MACOS)
 	target_compile_options(${PROJECT_NAME} PRIVATE -Wall)
 endif()
 
-# lines if you want add Qt UI in your plugin
-find_qt(COMPONENTS Widgets COMPONENTS_LINUX Gui)
 set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
 
 target_link_libraries(${PROJECT_NAME}
