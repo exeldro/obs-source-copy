@@ -163,7 +163,7 @@ static void try_fix_paths(obs_data_t *data, QString fileName)
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source,
 			   obs_sceneitem_t *item);
 
-static void LoadSources(obs_data_array_t *data)
+static void LoadSources(obs_data_array_t *data, obs_scene_t *scene)
 {
 	const size_t count = obs_data_array_count(data);
 	std::vector<obs_source_t *> sources;
@@ -175,8 +175,13 @@ static void LoadSources(obs_data_array_t *data)
 		obs_source_t *s = obs_get_source_by_name(name);
 		if (!s)
 			s = obs_load_source(sourceData);
-		if (s)
+		if (s) {
 			sources.push_back(s);
+			if (i == count - 1 && scene &&
+			    (obs_source_get_type(s) == OBS_SOURCE_TYPE_SCENE ||
+			     obs_source_get_type(s) == OBS_SOURCE_TYPE_INPUT))
+				obs_scene_add(scene, s);
+		}
 		obs_scene_t *scene = obs_scene_from_source(s);
 		if (!scene)
 			scene = obs_group_from_source(s);
@@ -203,7 +208,7 @@ static void LoadScene(obs_data_t *data)
 	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
 	if (!sourcesData)
 		return;
-	LoadSources(sourcesData);
+	LoadSources(sourcesData, nullptr);
 	obs_data_array_release(sourcesData);
 }
 
@@ -571,7 +576,8 @@ static void LoadSingleSource(obs_scene_t *scene, obs_data_t *data)
 	if (!source)
 		source = obs_load_source(data);
 	if (source) {
-		if (obs_source_get_type(source) == OBS_SOURCE_TYPE_INPUT) {
+		if (obs_source_get_type(source) == OBS_SOURCE_TYPE_INPUT ||
+		    obs_source_get_type(source) == OBS_SOURCE_TYPE_SCENE) {
 			obs_scene_add(scene, source);
 			obs_source_load(source);
 		}
@@ -585,7 +591,7 @@ static void LoadSource(obs_scene_t *scene, obs_data_t *data)
 		return;
 	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
 	if (sourcesData) {
-		LoadSources(sourcesData);
+		LoadSources(sourcesData, scene);
 		obs_data_array_release(sourcesData);
 	} else {
 		obs_data_t *sourceData = obs_data_get_obj(data, "source");
