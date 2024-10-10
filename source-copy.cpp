@@ -180,9 +180,36 @@ static void LoadScene(obs_data_t *data)
 	obs_data_array_release(sourcesData);
 }
 
+static config_t *(*get_user_config_func)(void) = nullptr;
+
+static config_t *get_user_config(void)
+{
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 0, 0)
+	if (!get_user_config_func) {
+		if (obs_get_version() < MAKE_SEMANTIC_VERSION(31, 0, 0)) {
+			get_user_config_func = obs_frontend_get_global_config;
+			blog(LOG_INFO, "[Aitum Multistream] use global config");
+		} else {
+			auto handle = os_dlopen("obs-frontend-api");
+			if (handle) {
+				get_user_config_func = (config_t * (*)(void)) os_dlsym(handle, "obs_frontend_get_user_config");
+				os_dlclose(handle);
+				if (get_user_config_func)
+					blog(LOG_INFO, "[Aitum Multistream] use user config");
+			}
+		}
+	}
+	if (get_user_config_func)
+		return get_user_config_func();
+	return obs_frontend_get_global_config();
+#else
+	return obs_frontend_get_user_config();
+#endif
+}
+
 obs_data_array_t *GetScriptsData()
 {
-	const auto config = obs_frontend_get_global_config();
+	const auto config = get_user_config();
 	if (!config)
 		return nullptr;
 	const std::string sceneCollection = config_get_string(config, "Basic", "SceneCollection");
@@ -205,7 +232,7 @@ obs_data_array_t *GetScriptsData()
 
 void LoadScriptData(obs_data_t *script_data)
 {
-	const auto config = obs_frontend_get_global_config();
+	const auto config = get_user_config();
 	if (!config)
 		return;
 
@@ -735,7 +762,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source, obs_sceneitem_t *i
 				return;
 			obs_data_t *data = obs_data_create_from_json_file(QT_TO_UTF8(fileName));
 			if (const auto t = obs_load_private_source(data)) {
-				obs_sceneitem_set_show_transition(item, t);
+				obs_sceneitem_set_transition(item, true, t);
 				obs_source_release(t);
 			}
 			obs_data_release(data);
@@ -748,7 +775,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source, obs_sceneitem_t *i
 				return;
 			obs_data_t *data = obs_data_create_from_json(QT_TO_UTF8(strData));
 			if (const auto t = obs_load_private_source(data)) {
-				obs_sceneitem_set_show_transition(item, t);
+				obs_sceneitem_set_transition(item, true, t);
 				obs_source_release(t);
 			}
 			obs_data_release(data);
