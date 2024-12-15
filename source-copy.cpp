@@ -188,14 +188,14 @@ static config_t *get_user_config(void)
 	if (!get_user_config_func) {
 		if (obs_get_version() < MAKE_SEMANTIC_VERSION(31, 0, 0)) {
 			get_user_config_func = obs_frontend_get_global_config;
-			blog(LOG_INFO, "[Aitum Multistream] use global config");
+			blog(LOG_INFO, "[Source Copy] use global config");
 		} else {
 			auto handle = os_dlopen("obs-frontend-api");
 			if (handle) {
 				get_user_config_func = (config_t * (*)(void)) os_dlsym(handle, "obs_frontend_get_user_config");
 				os_dlclose(handle);
 				if (get_user_config_func)
-					blog(LOG_INFO, "[Aitum Multistream] use user config");
+					blog(LOG_INFO, "[Source Copy] use user config");
 			}
 		}
 	}
