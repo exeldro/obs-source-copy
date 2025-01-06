@@ -180,17 +180,26 @@ static void LoadScene(obs_data_t *data)
 	obs_data_array_release(sourcesData);
 }
 
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 0, 0)
 static config_t *(*get_user_config_func)(void) = nullptr;
+static config_t *user_config = nullptr;
+#endif
 
-static config_t *get_user_config(void)
+config_t *get_user_config(void)
 {
 #if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 0, 0)
+	if (user_config)
+		return user_config;
 	if (!get_user_config_func) {
 		if (obs_get_version() < MAKE_SEMANTIC_VERSION(31, 0, 0)) {
 			get_user_config_func = obs_frontend_get_global_config;
 			blog(LOG_INFO, "[Source Copy] use global config");
 		} else {
+#ifdef __APPLE__
+			auto handle = os_dlopen("obs-frontend-api.dylib");
+#else
 			auto handle = os_dlopen("obs-frontend-api");
+#endif
 			if (handle) {
 				get_user_config_func = (config_t * (*)(void)) os_dlsym(handle, "obs_frontend_get_user_config");
 				os_dlclose(handle);
@@ -201,7 +210,8 @@ static config_t *get_user_config(void)
 	}
 	if (get_user_config_func)
 		return get_user_config_func();
-	return obs_frontend_get_global_config();
+	user_config = obs_frontend_get_global_config();
+	return user_config;
 #else
 	return obs_frontend_get_user_config();
 #endif
@@ -255,10 +265,10 @@ void LoadScriptData(obs_data_t *script_data)
 		obs_data_array_release(scripts);
 		obs_data_save_json_safe(data, path.c_str(), "tmp", "bak");
 		obs_data_release(data);
-		config_set_string(config, "Basic", "SceneCollection", "");
+		config_set_string(config, "Basic", "SceneCollection", "Source Copy Temp");
 		config_set_string(config, "Basic", "SceneCollectionFile", "source_copy_temp");
 		obs_frontend_set_current_scene_collection(sceneCollection.c_str());
-		std::string temp_path = obs_module_config_path("../../basic/scenes/scene_collection_manager_temp.json");
+		std::string temp_path = obs_module_config_path("../../basic/scenes/source_copy_temp.json");
 		os_unlink(temp_path.c_str());
 	} else {
 		obs_data_release(data);
