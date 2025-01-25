@@ -935,7 +935,7 @@ static void *vendor;
 void websocket_add_scene(obs_data_t *request_data, obs_data_t *response_data, void *param)
 {
 	UNUSED_PARAMETER(param);
-	LoadScene(request_data);
+	obs_queue_task(OBS_TASK_UI, (obs_task_t)LoadScene, request_data, true);
 	obs_data_set_bool(response_data, "success", true);
 }
 
