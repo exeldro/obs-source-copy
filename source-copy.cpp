@@ -939,6 +939,13 @@ void websocket_add_scene(obs_data_t *request_data, obs_data_t *response_data, vo
 	obs_data_set_bool(response_data, "success", true);
 }
 
+void websocket_get_version(obs_data_t *request_data, obs_data_t *response_data, void *param) {
+	UNUSED_PARAMETER(param);
+	UNUSED_PARAMETER(request_data);
+	obs_data_set_string(response_data, "version", PROJECT_VERSION);
+	obs_data_set_bool(response_data, "success", true);
+}
+
 void websocket_get_current_scene(obs_data_t *request_data, obs_data_t *response_data, void *param)
 {
 	UNUSED_PARAMETER(param);
@@ -1047,6 +1054,7 @@ void obs_module_post_load(void)
 	vendor = obs_websocket_register_vendor("source-copy");
 	if (!vendor)
 		return;
+	obs_websocket_vendor_register_request(vendor, "get_version", websocket_get_version, nullptr);
 	obs_websocket_vendor_register_request(vendor, "get_current_scene", websocket_get_current_scene, nullptr);
 	obs_websocket_vendor_register_request(vendor, "get_scene", websocket_get_scene, nullptr);
 	obs_websocket_vendor_register_request(vendor, "add_scene", websocket_add_scene, nullptr);
