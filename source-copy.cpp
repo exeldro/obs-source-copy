@@ -667,6 +667,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source, obs_sceneitem_t *i
 			obs_data_array_push_back(sources, sceneData);
 			obs_data_release(sceneData);
 			obs_data_save_json(data, QT_TO_UTF8(fileName));
+			obs_data_array_release(sources);
 			obs_data_release(data);
 		});
 		a = menu->addAction(
@@ -681,6 +682,7 @@ static void LoadSourceMenu(QMenu *menu, obs_source_t *source, obs_sceneitem_t *i
 			obs_data_release(sceneData);
 			QClipboard *clipboard = QGuiApplication::clipboard();
 			clipboard->setText(QT_UTF8(obs_data_get_json(data)));
+			obs_data_array_release(sources);
 			obs_data_release(data);
 		});
 		a = menu->addAction(QT_UTF8(obs_module_text("LoadSource")));
@@ -962,6 +964,7 @@ void websocket_get_current_scene(obs_data_t *request_data, obs_data_t *response_
 	obs_data_t *sceneData = obs_save_source(source);
 	obs_data_array_push_back(sources, sceneData);
 	obs_data_release(sceneData);
+	obs_data_array_release(sources);
 	obs_source_release(source);
 	obs_data_set_bool(response_data, "success", true);
 }
@@ -995,6 +998,7 @@ void websocket_get_scene(obs_data_t *request_data, obs_data_t *response_data, vo
 	obs_data_t *sceneData = obs_save_source(source);
 	obs_data_array_push_back(sources, sceneData);
 	obs_data_release(sceneData);
+	obs_data_array_release(sources);
 	obs_source_release(source);
 	obs_data_set_bool(response_data, "success", true);
 }
