@@ -14,6 +14,10 @@
 #include "util/platform.h"
 #include "obs-websocket-api.h"
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
 #define QT_UTF8(str) QString::fromUtf8(str)
 #define QT_TO_UTF8(str) str.toUtf8().constData()
 
@@ -22,6 +26,24 @@ OBS_MODULE_AUTHOR("Exeldro");
 OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
 #define MAX_PATH 260
+
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
+extern "C" {
+#define OBS_SOURCE_REQUIRES_CANVAS (1 << 17)
+struct obs_canvas;
+typedef struct obs_canvas obs_canvas_t;
+obs_source_t *(*obs_canvas_get_channel)(obs_canvas_t *canvas, uint32_t channel) = nullptr;
+obs_source_t *(*obs_canvas_get_source_by_name)(obs_canvas_t *canvas, const char *name) = nullptr;
+obs_source_t *(*obs_get_source_by_uuid)(const char *uuid) = nullptr;
+void (*obs_canvas_release)(obs_canvas_t *canvas) = nullptr;
+void (*obs_enum_canvases)(bool (*enum_proc)(void *, obs_canvas_t *), void *param) = nullptr;
+void (*obs_canvas_enum_scenes)(obs_canvas_t *canvas, bool (*enum_proc)(void *, obs_source_t *), void *param) = nullptr;
+const char *(*obs_canvas_get_name)(obs_canvas_t *canvas) = nullptr;
+const char *(*obs_canvas_get_uuid)(obs_canvas_t *canvas) = nullptr;
+obs_canvas_t *(*obs_source_get_canvas)(const obs_source_t *source) = nullptr;
+obs_canvas_t *(*obs_get_canvas_by_name)(const char *name) = nullptr;
+}
+#endif
 
 static bool replace(std::string &str, const char *from, const char *to)
 {
@@ -133,7 +155,7 @@ static void try_fix_paths(obs_data_t *data, QString fileName)
 
 static void LoadSourceMenu(QMenu *menu, obs_source_t *source, obs_sceneitem_t *item);
 
-static void LoadSources(obs_data_array_t *data, obs_scene_t *scene)
+static void LoadSources(obs_data_array_t *data, obs_scene_t *scene, obs_canvas_t *canvas = nullptr)
 {
 	const size_t count = obs_data_array_count(data);
 	std::vector<obs_source_t *> sources;
@@ -141,8 +163,23 @@ static void LoadSources(obs_data_array_t *data, obs_scene_t *scene)
 	for (size_t i = 0; i < count; i++) {
 		obs_data_t *sourceData = obs_data_array_item(data, i);
 		const char *name = obs_data_get_string(sourceData, "name");
-
-		obs_source_t *s = obs_get_source_by_name(name);
+		const char *canvas_uuid = obs_data_get_string(sourceData, "canvas_uuid");
+		if (canvas && canvas_uuid && canvas_uuid[0] != '\0' && strcmp(canvas_uuid, obs_canvas_get_uuid(canvas)) != 0) {
+			obs_data_set_string(sourceData, "canvas_uuid", obs_canvas_get_uuid(canvas));
+			obs_source_t *found = obs_get_source_by_uuid(obs_data_get_string(sourceData, "uuid"));
+			if (found) {
+				obs_canvas_t *found_canvas = obs_source_get_canvas(found);
+				if (found_canvas != canvas) {
+					obs_data_unset_user_value(sourceData, "uuid");
+				}
+				obs_canvas_release(found_canvas);
+				obs_source_release(found);
+			}
+		}
+		obs_source_t *s =
+			(canvas && obs_get_source_output_flags(obs_data_get_string(sourceData, "id")) & OBS_SOURCE_REQUIRES_CANVAS)
+				? obs_canvas_get_source_by_name(canvas, name)
+				: obs_get_source_by_name(name);
 		if (!s)
 			s = obs_load_source(sourceData);
 		if (s) {
@@ -169,14 +206,14 @@ static void LoadSources(obs_data_array_t *data, obs_scene_t *scene)
 		obs_source_release(source);
 }
 
-static void LoadScene(obs_data_t *data)
+static void LoadScene(obs_data_t *data, obs_canvas_t *canvas = nullptr)
 {
 	if (!data)
 		return;
 	obs_data_array_t *sourcesData = obs_data_get_array(data, "sources");
 	if (!sourcesData)
 		return;
-	LoadSources(sourcesData, nullptr);
+	LoadSources(sourcesData, nullptr, canvas);
 	obs_data_array_release(sourcesData);
 }
 
@@ -340,28 +377,28 @@ static void LoadScriptMenu(QMenu *menu)
 	obs_data_array_release(scripts);
 }
 
-static void LoadMenu(QMenu *menu)
+static void LoadCanvasMenu(QMenu *menu, obs_canvas_t *canvas)
 {
 	menu->clear();
 	QAction *a = menu->addAction(obs_module_text("LoadScene"));
-	QObject::connect(a, &QAction::triggered, [] {
+	QObject::connect(a, &QAction::triggered, [canvas] {
 		QString fileName = QFileDialog::getOpenFileName(nullptr, QT_UTF8(obs_module_text("LoadScene")), QString(),
 								"JSON File (*.json)");
 		if (fileName.isEmpty())
 			return;
 		obs_data_t *data = obs_data_create_from_json_file(QT_TO_UTF8(fileName));
 		try_fix_paths(data, fileName);
-		LoadScene(data);
+		LoadScene(data, canvas);
 		obs_data_release(data);
 	});
 	a = menu->addAction(QT_UTF8(obs_module_text("PasteScene")));
-	QObject::connect(a, &QAction::triggered, [] {
+	QObject::connect(a, &QAction::triggered, [canvas] {
 		QClipboard *clipboard = QGuiApplication::clipboard();
 		const QString strData = clipboard->text();
 		if (strData.isEmpty())
 			return;
 		obs_data_t *data = obs_data_create_from_json(QT_TO_UTF8(strData));
-		LoadScene(data);
+		LoadScene(data, canvas);
 		obs_data_release(data);
 	});
 	auto label = new QLabel("<b>" + QT_UTF8(obs_module_text("Scenes")) + "</b>");
@@ -371,8 +408,6 @@ static void LoadMenu(QMenu *menu)
 	wa->setDefaultWidget(label);
 	menu->addAction(wa);
 
-	struct obs_frontend_source_list scenes = {};
-	obs_frontend_get_scenes(&scenes);
 	wa = new QWidgetAction(menu);
 	auto t = new QLineEdit;
 	t->connect(t, &QLineEdit::textChanged, [menu](const QString text) {
@@ -380,7 +415,7 @@ static void LoadMenu(QMenu *menu)
 		{
 			if (!action->menu())
 				continue;
-			if (text.isEmpty() || action->text() == QT_UTF8(obs_module_text("Scripts"))) {
+			if (text.isEmpty()) {
 				action->setVisible(true);
 			} else {
 				action->setVisible(action->text().contains(text, Qt::CaseInsensitive));
@@ -389,14 +424,55 @@ static void LoadMenu(QMenu *menu)
 	});
 	wa->setDefaultWidget(t);
 	menu->addAction(wa);
+	if (canvas) {
+		obs_canvas_enum_scenes(
+			canvas,
+			[](void *data, obs_source_t *scene) -> bool {
+				QMenu *menu = static_cast<QMenu *>(data);
 
-	for (size_t i = 0; i < scenes.sources.num; i++) {
-		obs_source_t *source = scenes.sources.array[i];
-		QMenu *submenu = menu->addMenu(obs_source_get_name(scenes.sources.array[i]));
-		QObject::connect(submenu, &QMenu::aboutToShow, [submenu, source] { LoadSourceMenu(submenu, source, nullptr); });
+				QMenu *submenu = menu->addMenu(obs_source_get_name(scene));
+				QObject::connect(submenu, &QMenu::aboutToShow,
+						 [submenu, scene] { LoadSourceMenu(submenu, scene, nullptr); });
+				return true;
+			},
+			menu);
+	} else {
+		struct obs_frontend_source_list scenes = {};
+		obs_frontend_get_scenes(&scenes);
+		for (size_t i = 0; i < scenes.sources.num; i++) {
+			obs_source_t *source = scenes.sources.array[i];
+			QMenu *submenu = menu->addMenu(obs_source_get_name(scenes.sources.array[i]));
+			QObject::connect(submenu, &QMenu::aboutToShow,
+					 [submenu, source] { LoadSourceMenu(submenu, source, nullptr); });
+		}
+		obs_frontend_source_list_free(&scenes);
 	}
+}
 
-	obs_frontend_source_list_free(&scenes);
+static void LoadMenu(QMenu *menu)
+{
+	menu->clear();
+
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
+	if (!obs_enum_canvases) {
+		auto canvasMenu = menu->addMenu(QT_UTF8(obs_module_text("MainCanvas")));
+		QObject::connect(canvasMenu, &QMenu::aboutToShow, [canvasMenu] { LoadCanvasMenu(canvasMenu, nullptr); });
+	} else {
+#endif
+		obs_enum_canvases(
+			[](void *data, obs_canvas_t *canvas) -> bool {
+				QMenu *menu = static_cast<QMenu *>(data);
+				if (!canvas)
+					return true;
+				auto canvasMenu = menu->addMenu(QT_UTF8(obs_canvas_get_name(canvas)));
+				QObject::connect(canvasMenu, &QMenu::aboutToShow,
+						 [canvasMenu, canvas] { LoadCanvasMenu(canvasMenu, canvas); });
+				return true;
+			},
+			menu);
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
+	}
+#endif
 
 	menu->addSeparator();
 
@@ -460,6 +536,34 @@ static void frontend_save_load(obs_data_t *save_data, bool saving, void *)
 bool obs_module_load()
 {
 	blog(LOG_INFO, "[Source Copy] loaded version %s", PROJECT_VERSION);
+
+#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
+	if (obs_get_version() >= MAKE_SEMANTIC_VERSION(31, 1, 0)) {
+#ifdef _WIN32
+		void *dl = os_dlopen("obs");
+#else
+		void *dl = dlopen(nullptr, RTLD_LAZY);
+#endif
+		if (dl) {
+			obs_canvas_get_channel = (obs_source_t * (*)(obs_canvas_t * canvas, uint32_t channel))
+				os_dlsym(dl, "obs_canvas_get_channel");
+			obs_canvas_get_source_by_name = (obs_source_t * (*)(obs_canvas_t * canvas, const char *name))
+				os_dlsym(dl, "obs_canvas_get_source_by_name");
+			obs_get_source_by_uuid = (obs_source_t * (*)(const char *uuid)) os_dlsym(dl, "obs_get_source_by_uuid");
+			obs_canvas_release = (void (*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_release");
+			obs_enum_canvases =
+				(void (*)(bool (*enum_proc)(void *, obs_canvas_t *), void *param))os_dlsym(dl, "obs_enum_canvases");
+			obs_canvas_enum_scenes = (void (*)(obs_canvas_t *canvas, bool (*enum_proc)(void *, obs_source_t *),
+							   void *param))os_dlsym(dl, "obs_canvas_enum_scenes");
+			obs_canvas_get_name = (const char *(*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_get_name");
+			obs_canvas_get_uuid = (const char *(*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_get_uuid");
+			obs_source_get_canvas = (obs_canvas_t * (*)(const obs_source_t *source))
+				os_dlsym(dl, "obs_source_get_canvas");
+			obs_get_canvas_by_name = (obs_canvas_t * (*)(const char *name)) os_dlsym(dl, "obs_get_canvas_by_name");
+			os_dlclose(dl);
+		}
+	}
+#endif
 
 	copyTransformHotkey =
 		obs_hotkey_register_frontend("actionCopyTransform", obs_module_text("CopyTransform"), CopyTransform, nullptr);
@@ -941,7 +1045,8 @@ void websocket_add_scene(obs_data_t *request_data, obs_data_t *response_data, vo
 	obs_data_set_bool(response_data, "success", true);
 }
 
-void websocket_get_version(obs_data_t *request_data, obs_data_t *response_data, void *param) {
+void websocket_get_version(obs_data_t *request_data, obs_data_t *response_data, void *param)
+{
 	UNUSED_PARAMETER(param);
 	UNUSED_PARAMETER(request_data);
 	obs_data_set_string(response_data, "version", PROJECT_VERSION);
@@ -952,7 +1057,27 @@ void websocket_get_current_scene(obs_data_t *request_data, obs_data_t *response_
 {
 	UNUSED_PARAMETER(param);
 	UNUSED_PARAMETER(request_data);
-	obs_source_t *source = obs_frontend_get_current_scene();
+	obs_source_t *source = nullptr;
+	const char *canvas_name = obs_data_get_string(request_data, "canvas");
+	if (strlen(canvas_name)) {
+		obs_canvas_t *canvas = obs_get_canvas_by_name(canvas_name);
+		if (!canvas) {
+			obs_data_set_string(response_data, "error", "canvas not found");
+			obs_data_set_bool(response_data, "success", false);
+			return;
+		}
+		source = obs_canvas_get_channel(canvas, 0);
+		if (source && obs_source_get_type(source) == OBS_SOURCE_TYPE_TRANSITION) {
+			obs_source_t *ts = obs_transition_get_active_source(source);
+			if (ts) {
+				obs_source_release(source);
+				source = ts;
+			}
+		}
+		obs_canvas_release(canvas);
+	} else {
+		source = obs_frontend_get_current_scene();
+	}
 	if (!source) {
 		obs_data_set_bool(response_data, "success", false);
 		return;
@@ -979,7 +1104,21 @@ void websocket_get_scene(obs_data_t *request_data, obs_data_t *response_data, vo
 		return;
 	}
 
-	obs_source_t *source = obs_get_source_by_name(name);
+	obs_source_t *source = nullptr;
+	const char *canvas_name = obs_data_get_string(request_data, "canvas");
+	if (strlen(canvas_name)) {
+		obs_canvas_t *canvas = obs_get_canvas_by_name(canvas_name);
+		if (!canvas) {
+			obs_data_set_string(response_data, "error", "canvas not found");
+			obs_data_set_bool(response_data, "success", false);
+			return;
+		}
+		source = obs_canvas_get_source_by_name(canvas, name);
+		obs_canvas_release(canvas);
+	} else {
+		source = obs_get_source_by_name(name);
+	}
+
 	if (!source) {
 		obs_data_set_string(response_data, "error", "scene not found");
 		obs_data_set_bool(response_data, "success", false);
@@ -1013,7 +1152,20 @@ void websocket_get_source(obs_data_t *request_data, obs_data_t *response_data, v
 		return;
 	}
 
-	obs_source_t *source = obs_get_source_by_name(name);
+	obs_source_t *source = nullptr;
+	const char *canvas_name = obs_data_get_string(request_data, "canvas");
+	if (strlen(canvas_name)) {
+		obs_canvas_t *canvas = obs_get_canvas_by_name(canvas_name);
+		if (!canvas) {
+			obs_data_set_string(response_data, "error", "canvas not found");
+			obs_data_set_bool(response_data, "success", false);
+			return;
+		}
+		source = obs_canvas_get_source_by_name(canvas, name);
+		obs_canvas_release(canvas);
+	} else {
+		source = obs_get_source_by_name(name);
+	}
 	if (!source) {
 		obs_data_set_string(response_data, "error", "source not found");
 		obs_data_set_bool(response_data, "success", false);
@@ -1032,7 +1184,19 @@ void websocket_add_source(obs_data_t *request_data, obs_data_t *response_data, v
 	obs_source_t *source = nullptr;
 	const char *name = obs_data_get_string(request_data, "scene");
 	if (!name || !strlen(name)) {
-		source = obs_get_source_by_name(name);
+		const char *canvas_name = obs_data_get_string(request_data, "canvas");
+		if (strlen(canvas_name)) {
+			obs_canvas_t *canvas = obs_get_canvas_by_name(canvas_name);
+			if (!canvas) {
+				obs_data_set_string(response_data, "error", "canvas not found");
+				obs_data_set_bool(response_data, "success", false);
+				return;
+			}
+			source = obs_canvas_get_source_by_name(canvas, name);
+			obs_canvas_release(canvas);
+		} else {
+			source = obs_get_source_by_name(name);
+		}
 	} else {
 		source = obs_frontend_get_current_scene();
 	}
