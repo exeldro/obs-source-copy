@@ -1,18 +1,19 @@
 #include "source-copy.hpp"
 #include <obs-module.h>
 #include <QClipboard>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMainWindow>
 #include <QMenu>
 #include <QWidgetAction>
-#include <QLineEdit>
 
-#include "version.h"
+#include "obs-websocket-api.h"
 #include "util/config-file.h"
 #include "util/platform.h"
-#include "obs-websocket-api.h"
+#include "version.h"
 
 #ifndef _WIN32
 #include <dlfcn.h>
@@ -424,6 +425,11 @@ static void LoadMenu(QMenu *menu)
 
 	QMenu *submenu = menu->addMenu(QT_UTF8(obs_module_text("Scripts")));
 	QObject::connect(submenu, &QMenu::aboutToShow, [submenu] { LoadScriptMenu(submenu); });
+
+	menu->addSeparator();
+	menu->addAction(QString::fromUtf8("Source Copy (" PROJECT_VERSION ")"),
+			[] { QDesktopServices::openUrl(QUrl("https://obsproject.com/forum/resources/source-copy.1261/")); });
+	menu->addAction(QString::fromUtf8("By Exeldro"), [] { QDesktopServices::openUrl(QUrl("https://exeldro.com")); });
 }
 
 void CopyTransform(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey, bool pressed)
