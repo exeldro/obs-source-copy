@@ -27,24 +27,6 @@ OBS_MODULE_USE_DEFAULT_LOCALE("source-copy", "en-US")
 
 #define MAX_PATH 260
 
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
-extern "C" {
-#define OBS_SOURCE_REQUIRES_CANVAS (1 << 17)
-struct obs_canvas;
-typedef struct obs_canvas obs_canvas_t;
-obs_source_t *(*obs_canvas_get_channel)(obs_canvas_t *canvas, uint32_t channel) = nullptr;
-obs_source_t *(*obs_canvas_get_source_by_name)(obs_canvas_t *canvas, const char *name) = nullptr;
-obs_source_t *(*obs_get_source_by_uuid)(const char *uuid) = nullptr;
-void (*obs_canvas_release)(obs_canvas_t *canvas) = nullptr;
-void (*obs_enum_canvases)(bool (*enum_proc)(void *, obs_canvas_t *), void *param) = nullptr;
-void (*obs_canvas_enum_scenes)(obs_canvas_t *canvas, bool (*enum_proc)(void *, obs_source_t *), void *param) = nullptr;
-const char *(*obs_canvas_get_name)(obs_canvas_t *canvas) = nullptr;
-const char *(*obs_canvas_get_uuid)(obs_canvas_t *canvas) = nullptr;
-obs_canvas_t *(*obs_source_get_canvas)(const obs_source_t *source) = nullptr;
-obs_canvas_t *(*obs_get_canvas_by_name)(const char *name) = nullptr;
-}
-#endif
-
 static bool replace(std::string &str, const char *from, const char *to)
 {
 	size_t start_pos = str.find(from);
@@ -206,7 +188,7 @@ static void LoadSources(obs_data_array_t *data, obs_scene_t *scene, obs_canvas_t
 		obs_source_release(source);
 }
 
-static void LoadScene(obs_data_t *data, obs_canvas_t *canvas = nullptr)
+static void LoadSceneCanvas(obs_data_t *data, obs_canvas_t *canvas)
 {
 	if (!data)
 		return;
@@ -217,41 +199,14 @@ static void LoadScene(obs_data_t *data, obs_canvas_t *canvas = nullptr)
 	obs_data_array_release(sourcesData);
 }
 
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 0, 0)
-static config_t *(*get_user_config_func)(void) = nullptr;
-static config_t *user_config = nullptr;
-#endif
+static void LoadScene(obs_data_t *data)
+{
+	LoadSceneCanvas(data, nullptr);
+}
 
 config_t *get_user_config(void)
 {
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 0, 0)
-	if (user_config)
-		return user_config;
-	if (!get_user_config_func) {
-		if (obs_get_version() < MAKE_SEMANTIC_VERSION(31, 0, 0)) {
-			get_user_config_func = obs_frontend_get_global_config;
-			blog(LOG_INFO, "[Source Copy] use global config");
-		} else {
-#ifdef __APPLE__
-			auto handle = os_dlopen("obs-frontend-api.dylib");
-#else
-			auto handle = os_dlopen("obs-frontend-api");
-#endif
-			if (handle) {
-				get_user_config_func = (config_t * (*)(void)) os_dlsym(handle, "obs_frontend_get_user_config");
-				os_dlclose(handle);
-				if (get_user_config_func)
-					blog(LOG_INFO, "[Source Copy] use user config");
-			}
-		}
-	}
-	if (get_user_config_func)
-		return get_user_config_func();
-	user_config = obs_frontend_get_global_config();
-	return user_config;
-#else
 	return obs_frontend_get_user_config();
-#endif
 }
 
 obs_data_array_t *GetScriptsData()
@@ -388,7 +343,7 @@ static void LoadCanvasMenu(QMenu *menu, obs_canvas_t *canvas)
 			return;
 		obs_data_t *data = obs_data_create_from_json_file(QT_TO_UTF8(fileName));
 		try_fix_paths(data, fileName);
-		LoadScene(data, canvas);
+		LoadSceneCanvas(data, canvas);
 		obs_data_release(data);
 	});
 	a = menu->addAction(QT_UTF8(obs_module_text("PasteScene")));
@@ -398,7 +353,7 @@ static void LoadCanvasMenu(QMenu *menu, obs_canvas_t *canvas)
 		if (strData.isEmpty())
 			return;
 		obs_data_t *data = obs_data_create_from_json(QT_TO_UTF8(strData));
-		LoadScene(data, canvas);
+		LoadSceneCanvas(data, canvas);
 		obs_data_release(data);
 	});
 	auto label = new QLabel("<b>" + QT_UTF8(obs_module_text("Scenes")) + "</b>");
@@ -453,26 +408,17 @@ static void LoadMenu(QMenu *menu)
 {
 	menu->clear();
 
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
-	if (!obs_enum_canvases) {
-		auto canvasMenu = menu->addMenu(QT_UTF8(obs_module_text("MainCanvas")));
-		QObject::connect(canvasMenu, &QMenu::aboutToShow, [canvasMenu] { LoadCanvasMenu(canvasMenu, nullptr); });
-	} else {
-#endif
-		obs_enum_canvases(
-			[](void *data, obs_canvas_t *canvas) -> bool {
-				QMenu *menu = static_cast<QMenu *>(data);
-				if (!canvas)
-					return true;
-				auto canvasMenu = menu->addMenu(QT_UTF8(obs_canvas_get_name(canvas)));
-				QObject::connect(canvasMenu, &QMenu::aboutToShow,
-						 [canvasMenu, canvas] { LoadCanvasMenu(canvasMenu, canvas); });
+	obs_enum_canvases(
+		[](void *data, obs_canvas_t *canvas) -> bool {
+			QMenu *menu = static_cast<QMenu *>(data);
+			if (!canvas)
 				return true;
-			},
-			menu);
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
-	}
-#endif
+			auto canvasMenu = menu->addMenu(QT_UTF8(obs_canvas_get_name(canvas)));
+			QObject::connect(canvasMenu, &QMenu::aboutToShow,
+					 [canvasMenu, canvas] { LoadCanvasMenu(canvasMenu, canvas); });
+			return true;
+		},
+		menu);
 
 	menu->addSeparator();
 
@@ -536,34 +482,6 @@ static void frontend_save_load(obs_data_t *save_data, bool saving, void *)
 bool obs_module_load()
 {
 	blog(LOG_INFO, "[Source Copy] loaded version %s", PROJECT_VERSION);
-
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(31, 1, 0)
-	if (obs_get_version() >= MAKE_SEMANTIC_VERSION(31, 1, 0)) {
-#ifdef _WIN32
-		void *dl = os_dlopen("obs");
-#else
-		void *dl = dlopen(nullptr, RTLD_LAZY);
-#endif
-		if (dl) {
-			obs_canvas_get_channel = (obs_source_t * (*)(obs_canvas_t * canvas, uint32_t channel))
-				os_dlsym(dl, "obs_canvas_get_channel");
-			obs_canvas_get_source_by_name = (obs_source_t * (*)(obs_canvas_t * canvas, const char *name))
-				os_dlsym(dl, "obs_canvas_get_source_by_name");
-			obs_get_source_by_uuid = (obs_source_t * (*)(const char *uuid)) os_dlsym(dl, "obs_get_source_by_uuid");
-			obs_canvas_release = (void (*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_release");
-			obs_enum_canvases =
-				(void (*)(bool (*enum_proc)(void *, obs_canvas_t *), void *param))os_dlsym(dl, "obs_enum_canvases");
-			obs_canvas_enum_scenes = (void (*)(obs_canvas_t *canvas, bool (*enum_proc)(void *, obs_source_t *),
-							   void *param))os_dlsym(dl, "obs_canvas_enum_scenes");
-			obs_canvas_get_name = (const char *(*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_get_name");
-			obs_canvas_get_uuid = (const char *(*)(obs_canvas_t *canvas))os_dlsym(dl, "obs_canvas_get_uuid");
-			obs_source_get_canvas = (obs_canvas_t * (*)(const obs_source_t *source))
-				os_dlsym(dl, "obs_source_get_canvas");
-			obs_get_canvas_by_name = (obs_canvas_t * (*)(const char *name)) os_dlsym(dl, "obs_get_canvas_by_name");
-			os_dlclose(dl);
-		}
-	}
-#endif
 
 	copyTransformHotkey =
 		obs_hotkey_register_frontend("actionCopyTransform", obs_module_text("CopyTransform"), CopyTransform, nullptr);
@@ -693,12 +611,8 @@ static obs_data_t *GetTransformData(obs_sceneitem_t *item)
 {
 	obs_data_t *temp = obs_data_create();
 	obs_transform_info info{};
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
-	obs_sceneitem_get_info(item, &info);
-#else
 	obs_sceneitem_get_info2(item, &info);
 	obs_data_set_bool(temp, "crop_to_bounds", info.crop_to_bounds);
-#endif
 	obs_data_set_vec2(temp, "pos", &info.pos);
 	obs_data_set_vec2(temp, "scale", &info.scale);
 	obs_data_set_double(temp, "rot", info.rot);
@@ -718,12 +632,8 @@ static obs_data_t *GetTransformData(obs_sceneitem_t *item)
 void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 {
 	obs_transform_info info{};
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
-	obs_sceneitem_get_info(item, &info);
-#else
 	obs_sceneitem_get_info2(item, &info);
 	info.crop_to_bounds = obs_data_get_bool(data, "crop_to_bounds");
-#endif
 	obs_data_get_vec2(data, "pos", &info.pos);
 	obs_data_get_vec2(data, "scale", &info.scale);
 	info.rot = obs_data_get_double(data, "rot");
@@ -731,11 +641,7 @@ void LoadTransform(obs_sceneitem_t *item, obs_data_t *data)
 	info.bounds_type = (enum obs_bounds_type)obs_data_get_int(data, "bounds_type");
 	obs_data_get_vec2(data, "bounds", &info.bounds);
 	info.bounds_alignment = obs_data_get_int(data, "bounds_alignment");
-#if LIBOBS_API_VER < MAKE_SEMANTIC_VERSION(30, 1, 0)
-	obs_sceneitem_set_info(item, &info);
-#else
 	obs_sceneitem_set_info2(item, &info);
-#endif
 	obs_sceneitem_crop crop{};
 	crop.top = obs_data_get_int(data, "top");
 	crop.bottom = obs_data_get_int(data, "bottom");
