@@ -3,80 +3,64 @@ if(CMAKE_PROJECT_NAME STREQUAL "obs-studio")
   set(BUILD_OUT_OF_TREE OFF)
 else()
   set(BUILD_OUT_OF_TREE ON)
-  cmake_minimum_required(VERSION 3.18)
+  cmake_minimum_required(VERSION 3.16...3.26)
 endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
-project(source-copy VERSION 0.2.2)
-set(PROJECT_FULL_NAME "Source Copy")
+project(${_name} VERSION ${_version})
 
-# Set new UUIDs when you start to create a new plugin.
-set(MACOS_PACKAGE_UUID "FB542D18-86CC-403A-A284-77167E761685")
-set(MACOS_INSTALLER_UUID "C4D6AC2A-0D9A-4CFC-9E55-A3F22A60393E")
+include(compilerconfig)
+include(defaults)
+include(helpers)
 
 add_library(${PROJECT_NAME} MODULE)
 
+target_link_libraries(${PROJECT_NAME} PRIVATE OBS::libobs)
+
+if(BUILD_OUT_OF_TREE)
+  find_package(libobs REQUIRED)
+  find_package(obs-frontend-api REQUIRED)
+  target_link_libraries(${PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+else()
+  target_link_libraries(${PROJECT_NAME} PRIVATE OBS::frontend-api)
+endif()
+
+find_package(Qt6 COMPONENTS Widgets Core)
+if(BUILD_OUT_OF_TREE)
+  if(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
+    find_package(Qt6 REQUIRED Gui)
+  endif()
+endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE Qt::Core Qt::Widgets)
+
+if((OS_LINUX OR OS_FREEBSD OR OS_OPENBSD) AND Qt_VERSION VERSION_LESS "6.9.0")
+	target_link_libraries(${PROJECT_NAME} PRIVATE Qt::GuiPrivate)
+endif()
+
+target_compile_options(
+${PROJECT_NAME} PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header
+                                -Wno-comma>)
+set_target_properties(${PROJECT_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_target_properties(
+${PROJECT_NAME}
+PROPERTIES AUTOMOC ON
+            AUTOUIC ON
+            AUTORCC ON)
+
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/version.h)
 
+if(OS_WINDOWS)
+  configure_file(cmake/windows/resources/installer-Windows.iss.in "${CMAKE_CURRENT_BINARY_DIR}/installer-Windows.generated.iss")
+endif()
+
 target_sources(${PROJECT_NAME} PRIVATE
-source-copy.cpp
+	source-copy.cpp
 	source-copy.hpp
+	obs-websocket-api.h
 	version.h)
 
 if(BUILD_OUT_OF_TREE)
-	find_package(libobs REQUIRED)
-	find_package(obs-frontend-api REQUIRED)
-	include(cmake/ObsPluginHelpers.cmake)
-	set(OBS_FRONTEND_API_NAME "obs-frontend-api")
+	set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 else()
-	set(OBS_FRONTEND_API_NAME "frontend-api")
+	set_target_properties_obs(${PROJECT_NAME} PROPERTIES FOLDER "plugins/exeldro" PREFIX "")
 endif()
-  
-if(OS_WINDOWS)
-	get_filename_component(ISS_FILES_DIR "${CMAKE_BINARY_DIR}\\..\\package" ABSOLUTE)
-	file(TO_NATIVE_PATH "${ISS_FILES_DIR}" ISS_FILES_DIR)
-	get_filename_component(ISS_PACKAGE_DIR "${CMAKE_PACKAGE_PREFIX}\\.." ABSOLUTE)
-	file(TO_NATIVE_PATH "${ISS_PACKAGE_DIR}" ISS_PACKAGE_DIR)
-	get_filename_component(ISS_SOURCE_DIR "${PROJECT_SOURCE_DIR}" ABSOLUTE)
-	file(TO_NATIVE_PATH "${ISS_SOURCE_DIR}" ISS_SOURCE_DIR)
-	configure_file("installer.iss.in"
-			"${PROJECT_BINARY_DIR}/installer.iss"
-		)
-	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/resource.rc.in ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}.rc)
-	target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}.rc)
-	
-elseif(OS_MACOS)
-	set(MACOS_BUNDLEID "com.exeldro.${PROJECT_NAME}")
-	set(MACOSX_PLUGIN_GUI_IDENTIFIER "${MACOS_BUNDLEID}")
-	set(MACOSX_PLUGIN_BUNDLE_VERSION "${PROJECT_VERSION}")
-	set(MACOSX_PLUGIN_SHORT_VERSION_STRING "1")
-	configure_file(cmake/bundle/macos/installer-macos.pkgproj.in ${CMAKE_BINARY_DIR}/installer-macos.generated.pkgproj)
-	target_compile_options(${PROJECT_NAME} PRIVATE -Wall)
-endif()
-
-# lines if you want add Qt UI in your plugin
-find_qt(COMPONENTS Widgets COMPONENTS_LINUX Gui)
-set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
-
-target_link_libraries(${PROJECT_NAME}
-		OBS::${OBS_FRONTEND_API_NAME}
-		Qt::Widgets
-		OBS::libobs)
-
-if(BUILD_OUT_OF_TREE)
-	if(NOT LIB_OUT_DIR)
-		set(LIB_OUT_DIR "/lib/obs-plugins")
-	endif()
-	if(NOT DATA_OUT_DIR)
-		set(DATA_OUT_DIR "/share/obs/obs-plugins/${PROJECT_NAME}")
-	endif()
-	set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "")
-	install(TARGETS ${PROJECT_NAME}
-		LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/${LIB_OUT_DIR})
-	install(DIRECTORY data/locale
-		DESTINATION ${CMAKE_INSTALL_PREFIX}/${DATA_OUT_DIR})
-else()
-	target_include_directories(${PROJECT_NAME} PRIVATE
-		"${CMAKE_SOURCE_DIR}/UI/obs-frontend-api")
-	set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER "plugins/exeldro")
-endif()
-setup_plugin_target(${PROJECT_NAME})
