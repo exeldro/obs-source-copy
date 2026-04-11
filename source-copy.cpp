@@ -979,11 +979,13 @@ void websocket_get_current_scene(obs_data_t *request_data, obs_data_t *response_
 			return;
 		}
 		source = obs_canvas_get_channel(canvas, 0);
-		if (source && obs_source_get_type(source) == OBS_SOURCE_TYPE_TRANSITION) {
+		while (source && obs_source_get_type(source) == OBS_SOURCE_TYPE_TRANSITION) {
 			obs_source_t *ts = obs_transition_get_active_source(source);
 			if (ts) {
 				obs_source_release(source);
 				source = ts;
+			} else {
+				break;
 			}
 		}
 		obs_canvas_release(canvas);
