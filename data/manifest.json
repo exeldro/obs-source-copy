@@ -1,0 +1,16 @@
+{
+    "display_name": "Source Copy",
+    "id": "62774ed3-1ed8-42c5-9ad9-ce40bf36a392",
+    "version": "0.4.0",
+    "authors": ["Exeldro"],
+    "name": "source-copy",
+    "description": "Copy and paste scenes, sources and filters on clipboard",
+    "long_description": "Plugin for OBS Studio adding Source Copy functionality. Source Copy allows you to copy and paste scenes, sources and filters on the clipboard.",
+    "urls": {
+        "repository": "https://github.com/exeldro/obs-source-copy",
+        "website": "https://obsproject.com/forum/resources/source-copy.1261/",
+        "support": "https://obsproject.com/forum/threads/source-copy.142574/"
+    },
+    "has_banner": false,
+    "has_icon": false
+}
